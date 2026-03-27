@@ -1,0 +1,54 @@
+"""Synchronous DB helpers for use inside Celery tasks (no asyncio event loop)."""
+import uuid
+from datetime import datetime
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.models.game import Game, GameStatus
+from app.models.clip import Clip, ActionType
+
+# Sync engine (Celery workers don't run in an asyncio loop)
+_sync_url = settings.database_url.replace("+asyncpg", "")
+_engine = create_engine(_sync_url, pool_pre_ping=True)
+
+
+def sync_get_game(game_id: uuid.UUID) -> Game | None:
+    with Session(_engine) as s:
+        return s.get(Game, game_id)
+
+
+def sync_set_game_status(
+    game_id: uuid.UUID,
+    status: str,
+    processed_at: datetime | None = None,
+    error_message: str | None = None,
+):
+    with Session(_engine) as s:
+        game = s.get(Game, game_id)
+        if not game:
+            return
+        game.status = GameStatus(status)
+        if processed_at:
+            game.processed_at = processed_at
+        if error_message:
+            game.error_message = error_message
+        s.commit()
+
+
+def sync_save_clips(rows: list[dict]):
+    with Session(_engine) as s:
+        for row in rows:
+            clip = Clip(
+                id=row["id"],
+                game_id=row["game_id"],
+                action_type=ActionType(row["action_type"]),
+                confidence=row["confidence"],
+                start_time=row["start_time"],
+                end_time=row["end_time"],
+                clip_url=row["clip_url"],
+                thumbnail_url=row.get("thumbnail_url"),
+            )
+            s.add(clip)
+        s.commit()

@@ -1,0 +1,88 @@
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.database import get_db
+from app.models.game import Game, GameStatus
+from app.models.clip import Clip
+from app.schemas.game import GameOut
+from app.services import storage
+from app.workers.tasks import process_game_task
+
+router = APIRouter(prefix="/games", tags=["games"])
+
+DB = Annotated[AsyncSession, Depends(get_db)]
+
+# TODO: wire real auth — for now every request is treated as a fixed dev user
+DEV_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+@router.get("", response_model=list[GameOut])
+async def list_games(db: DB):
+    result = await db.execute(
+        select(Game).where(Game.owner_id == DEV_USER_ID).order_by(Game.created_at.desc())
+    )
+    games = result.scalars().all()
+
+    # Attach clip counts
+    clip_counts_q = await db.execute(
+        select(Clip.game_id, func.count(Clip.id).label("n"))
+        .where(Clip.game_id.in_([g.id for g in games]))
+        .group_by(Clip.game_id)
+    )
+    counts = {row.game_id: row.n for row in clip_counts_q}
+
+    out = []
+    for g in games:
+        d = GameOut.model_validate(g)
+        d.clip_count = counts.get(g.id, 0)
+        out.append(d)
+    return out
+
+
+@router.get("/{game_id}", response_model=GameOut)
+async def get_game(game_id: uuid.UUID, db: DB):
+    game = await db.get(Game, game_id)
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    clip_count_q = await db.execute(
+        select(func.count(Clip.id)).where(Clip.game_id == game_id)
+    )
+    count = clip_count_q.scalar_one()
+    out = GameOut.model_validate(game)
+    out.clip_count = count
+    return out
+
+
+@router.post("", response_model=GameOut, status_code=status.HTTP_201_CREATED)
+async def create_game(
+    file: Annotated[UploadFile, File(description="Game video file")],
+    title: Annotated[str, Form()],
+    db: DB,
+):
+    game_id = uuid.uuid4()
+    key = storage.game_raw_key(game_id, file.filename or "upload.mp4")
+
+    try:
+        raw_url = storage.upload_fileobj(file.file, key, content_type=file.content_type or "video/mp4")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Storage upload failed: {exc}") from exc
+
+    game = Game(
+        id=game_id,
+        owner_id=DEV_USER_ID,
+        title=title,
+        status=GameStatus.queued,
+        raw_video_url=raw_url,
+    )
+    db.add(game)
+    await db.commit()
+    await db.refresh(game)
+
+    # Enqueue processing job
+    process_game_task.delay(str(game_id), raw_url)
+
+    return GameOut.model_validate(game)

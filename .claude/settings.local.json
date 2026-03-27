@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/nelso/AppData/Roaming/Claude/local-agent-mode-sessions/skills-plugin/951d232c-4fbd-4cf1-b848-332a41593f31/b1c73cb4-f2f9-45a0-993d-f7a8cb8d9aee/skills/docx/**)",
+      "Bash(pandoc --track-changes=all \"C:\\\\Users\\\\nelso\\\\Downloads\\\\volleyball_mvp_plan.docx\" -o /tmp/volleyball_mvp.md)",
+      "Read(//tmp/**)",
+      "Bash(python scripts/office/unpack.py \"C:\\\\Users\\\\nelso\\\\Downloads\\\\volleyball_mvp_plan.docx\" /tmp/volleyball_unpacked/)",
+      "Bash(pip install:*)",
+      "Bash(python \"C:\\\\Users\\\\nelso\\\\AppData\\\\Roaming\\\\Claude\\\\local-agent-mode-sessions\\\\skills-plugin\\\\951d232c-4fbd-4cf1-b848-332a41593f31\\\\b1c73cb4-f2f9-45a0-993d-f7a8cb8d9aee\\\\skills\\\\docx\\\\scripts\\\\office\\\\unpack.py\" \"C:\\\\Users\\\\nelso\\\\Downloads\\\\volleyball_mvp_plan.docx\" \"C:\\\\Users\\\\nelso\\\\AppData\\\\Local\\\\Temp\\\\volleyball_unpacked\")",
+      "Bash(python -c \":*)",
+      "Bash(npm --version)",
+      "Bash(git --version)",
+      "Bash(pnpm --version)",
+      "Bash(npx create-next-app@latest web --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --no-git)",
+      "Bash(npx --yes create-next-app@latest web --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --no-git --no-react-compiler)",
+      "Bash(npm install:*)",
+      "Bash(npm run:*)"
+    ]
+  }
+}
