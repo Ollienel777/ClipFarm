@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, s
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import get_current_user_id
 from app.database import get_db
 from app.models.game import Game, GameStatus
 from app.models.clip import Clip
@@ -15,15 +16,13 @@ from app.workers.tasks import process_game_task
 router = APIRouter(prefix="/games", tags=["games"])
 
 DB = Annotated[AsyncSession, Depends(get_db)]
-
-# TODO: wire real auth — for now every request is treated as a fixed dev user
-DEV_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+UserId = Annotated[uuid.UUID, Depends(get_current_user_id)]
 
 
 @router.get("", response_model=list[GameOut])
-async def list_games(db: DB):
+async def list_games(user_id: UserId, db: DB):
     result = await db.execute(
-        select(Game).where(Game.owner_id == DEV_USER_ID).order_by(Game.created_at.desc())
+        select(Game).where(Game.owner_id == user_id).order_by(Game.created_at.desc())
     )
     games = result.scalars().all()
 
@@ -44,9 +43,9 @@ async def list_games(db: DB):
 
 
 @router.get("/{game_id}", response_model=GameOut)
-async def get_game(game_id: uuid.UUID, db: DB):
+async def get_game(game_id: uuid.UUID, user_id: UserId, db: DB):
     game = await db.get(Game, game_id)
-    if not game:
+    if not game or game.owner_id != user_id:
         raise HTTPException(status_code=404, detail="Game not found")
     clip_count_q = await db.execute(
         select(func.count(Clip.id)).where(Clip.game_id == game_id)
@@ -59,6 +58,7 @@ async def get_game(game_id: uuid.UUID, db: DB):
 
 @router.post("", response_model=GameOut, status_code=status.HTTP_201_CREATED)
 async def create_game(
+    user_id: UserId,
     file: Annotated[UploadFile, File(description="Game video file")],
     title: Annotated[str, Form()],
     db: DB,
@@ -73,7 +73,7 @@ async def create_game(
 
     game = Game(
         id=game_id,
-        owner_id=DEV_USER_ID,
+        owner_id=user_id,
         title=title,
         status=GameStatus.queued,
         raw_video_url=raw_url,

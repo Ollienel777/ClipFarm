@@ -11,7 +11,12 @@ from alembic import context
 from app.database import Base
 import app.models  # noqa: F401
 
+from app.config import settings
+
 config = context.config
+# Override alembic.ini with the real DATABASE_URL from .env
+config.set_main_option("sqlalchemy.url", settings.database_url)
+
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 

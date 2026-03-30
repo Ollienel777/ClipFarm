@@ -1,10 +1,27 @@
+import { createClient } from "@/lib/supabase";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+async function getAuthHeaders(): Promise<Record<string, string>> {
+  try {
+    const supabase = createClient();
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.access_token) {
+      return { Authorization: `Bearer ${data.session.access_token}` };
+    }
+  } catch {
+    // Not logged in — fall through
+  }
+  return {};
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const authHeaders = await getAuthHeaders();
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
+      ...authHeaders,
       ...init?.headers,
     },
   });
@@ -42,9 +59,16 @@ export async function uploadGame(
   formData.append("file", file);
   formData.append("title", title);
 
+  const authHeaders = await getAuthHeaders();
+
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_URL}/games`);
+
+    // Set auth header on XHR
+    for (const [key, value] of Object.entries(authHeaders)) {
+      xhr.setRequestHeader(key, value);
+    }
 
     if (onProgress) {
       xhr.upload.onprogress = (e) => {

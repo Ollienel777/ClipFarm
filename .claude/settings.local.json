@@ -14,7 +14,21 @@
       "Bash(npx create-next-app@latest web --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --no-git)",
       "Bash(npx --yes create-next-app@latest web --typescript --tailwind --eslint --app --src-dir --import-alias \"@/*\" --no-git --no-react-compiler)",
       "Bash(npm install:*)",
-      "Bash(npm run:*)"
+      "Bash(npm run:*)",
+      "Bash(python -m alembic upgrade head)",
+      "Bash(timeout 8 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000)",
+      "Bash(uvicorn app.main:app --reload --host 127.0.0.1 --port 8000)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(netstat -ano)",
+      "Bash(findstr :3000)",
+      "Bash(taskkill /PID 19948 /F)",
+      "Bash(cmd.exe /c \"taskkill /PID 19948 /F\")",
+      "Bash(cmd.exe /c \"taskkill /PID 19948 /F 2>&1\")",
+      "Bash(TASKKILL //PID 19948 //F)",
+      "Bash(curl -s http://localhost:8000/health)",
+      "Bash(curl -s http://localhost:8000/games)",
+      "Bash(python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000)",
+      "Bash(curl -s http://localhost:3000/games -o /dev/null -w \"%{http_code}\")"
     ]
   }
 }
