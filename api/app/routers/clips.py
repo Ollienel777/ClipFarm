@@ -1,18 +1,33 @@
 import uuid
 from typing import Annotated
+from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import get_current_user_id
 from app.database import get_db
 from app.models.clip import Clip, ActionType
+from app.models.correction import Correction
 from app.models.player import Player
-from app.schemas.clip import ClipOut, ClipTagRequest
+from app.schemas.clip import ClipOut, ClipTagRequest, ClipFixActionRequest
+from app.services import storage
 
 router = APIRouter(tags=["clips"])
 
 DB = Annotated[AsyncSession, Depends(get_db)]
+
+API_BASE = "http://localhost:8000"
+
+
+def _rewrite_urls(clip: Clip) -> dict[str, str]:
+    """Replace stored R2 URLs with our proxy endpoints."""
+    return {
+        "clip_url": f"{API_BASE}/media/clips/{clip.id}.mp4",
+        "thumbnail_url": f"{API_BASE}/media/clips/{clip.id}/thumb.jpg" if clip.thumbnail_url else None,
+    }
 
 
 @router.get("/games/{game_id}/clips", response_model=list[ClipOut])
@@ -54,8 +69,65 @@ async def list_clips(
     for c in clips:
         d = ClipOut.model_validate(c)
         d.player_name = player_map.get(c.player_id) if c.player_id else None  # type: ignore[arg-type]
+        urls = _rewrite_urls(c)
+        d.clip_url = urls["clip_url"]
+        d.thumbnail_url = urls["thumbnail_url"]
         out.append(d)
     return out
+
+
+@router.get("/media/clips/{clip_id}.mp4")
+async def stream_clip(clip_id: uuid.UUID, db: DB, request: Request):
+    """Stream a clip video from R2 via the API (avoids public URL issues)."""
+    clip = await db.get(Clip, clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    key = urlparse(clip.clip_url).path.lstrip("/")
+    client = storage._client()
+    range_header = request.headers.get("range")
+
+    if range_header:
+        resp = client.get_object(
+            Bucket=storage.settings.r2_bucket_name, Key=key, Range=range_header,
+        )
+        return StreamingResponse(
+            resp["Body"].iter_chunks(),
+            status_code=206,
+            media_type="video/mp4",
+            headers={
+                "Content-Length": str(resp["ContentLength"]),
+                "Content-Range": resp["ContentRange"],
+                "Accept-Ranges": "bytes",
+            },
+        )
+
+    resp = client.get_object(Bucket=storage.settings.r2_bucket_name, Key=key)
+    return StreamingResponse(
+        resp["Body"].iter_chunks(),
+        media_type="video/mp4",
+        headers={
+            "Content-Length": str(resp["ContentLength"]),
+            "Accept-Ranges": "bytes",
+        },
+    )
+
+
+@router.get("/media/clips/{clip_id}/thumb.jpg")
+async def stream_thumbnail(clip_id: uuid.UUID, db: DB):
+    """Stream a clip thumbnail from R2 via the API."""
+    clip = await db.get(Clip, clip_id)
+    if not clip or not clip.thumbnail_url:
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    key = urlparse(clip.thumbnail_url).path.lstrip("/")
+    try:
+        resp = storage._client().get_object(Bucket=storage.settings.r2_bucket_name, Key=key)
+    except Exception:
+        raise HTTPException(status_code=404, detail="Thumbnail not found in storage")
+    return StreamingResponse(
+        resp["Body"].iter_chunks(),
+        media_type="image/jpeg",
+        headers={"Content-Length": str(resp["ContentLength"])},
+    )
 
 
 @router.patch("/clips/{clip_id}/tag", response_model=ClipOut)
@@ -77,10 +149,57 @@ async def tag_clip(clip_id: uuid.UUID, body: ClipTagRequest, db: DB):
     return out
 
 
+VALID_ACTIONS = {"spike", "serve", "dig", "set", "block", "not_an_action"}
+
+
+@router.patch("/clips/{clip_id}/action", response_model=ClipOut)
+async def fix_clip_action(
+    clip_id: uuid.UUID,
+    body: ClipFixActionRequest,
+    db: DB,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+):
+    """Let a user correct a clip's action type. Stores the correction as training data."""
+    if body.action not in VALID_ACTIONS:
+        raise HTTPException(status_code=400, detail=f"Invalid action. Must be one of: {VALID_ACTIONS}")
+
+    clip = await db.get(Clip, clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    # Save the correction as training data
+    correction = Correction(
+        clip_id=clip.id,
+        user_id=user_id,
+        original_action=clip.action_type,
+        corrected_action=body.action,
+        original_confidence=clip.confidence,
+        start_time=clip.start_time,
+        end_time=clip.end_time,
+    )
+    db.add(correction)
+
+    # Update the clip's action type (or mark as hidden if "not_an_action")
+    if body.action == "not_an_action":
+        clip.action_type = ActionType.unknown
+        clip.confidence = 0.0
+    else:
+        clip.action_type = ActionType(body.action)
+        clip.confidence = 1.0  # User-verified = 100% confidence
+
+    await db.commit()
+    await db.refresh(clip)
+
+    out = ClipOut.model_validate(clip)
+    urls = _rewrite_urls(clip)
+    out.clip_url = urls["clip_url"]
+    out.thumbnail_url = urls["thumbnail_url"]
+    return out
+
+
 @router.get("/clips/{clip_id}/share")
 async def share_clip(clip_id: uuid.UUID, db: DB):
     clip = await db.get(Clip, clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
-    # Return the direct clip URL as the share link
-    return {"url": clip.clip_url}
+    return {"url": f"{API_BASE}/media/clips/{clip.id}.mp4"}

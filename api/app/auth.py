@@ -1,6 +1,8 @@
 """
 Supabase Auth JWT verification for FastAPI.
 
+Verifies tokens using Supabase's JWKS endpoint (supports ES256 ECC keys).
+
 Usage in routers:
     from app.auth import get_current_user_id
 
@@ -10,9 +12,10 @@ Usage in routers:
 """
 import uuid
 
+import jwt as pyjwt
+from jwt import PyJWKClient
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +24,17 @@ from app.database import get_db
 from app.models.user import User
 
 _bearer = HTTPBearer(auto_error=False)
+
+# JWKS client — caches keys automatically
+_jwks_client: PyJWKClient | None = None
+
+
+def _get_jwks_client() -> PyJWKClient:
+    global _jwks_client
+    if _jwks_client is None:
+        jwks_url = f"{settings.supabase_url}/auth/v1/.well-known/jwks.json"
+        _jwks_client = PyJWKClient(jwks_url, cache_keys=True)
+    return _jwks_client
 
 
 async def _ensure_user_exists(user_id: uuid.UUID, email: str, db: AsyncSession) -> None:
@@ -40,13 +54,12 @@ async def get_current_user_id(
     and return the user's UUID.
 
     Falls back to DEV_USER_ID when no auth header is present
-    and no JWT_SECRET is configured (local dev convenience).
+    and no Supabase URL is configured (local dev convenience).
     """
     DEV_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
-    # Dev mode: if no credentials and secret is the default, allow through
     if credentials is None:
-        if settings.jwt_secret == "change-me-in-production":
+        if not settings.supabase_url:
             return DEV_USER_ID
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -55,16 +68,32 @@ async def get_current_user_id(
 
     token = credentials.credentials
     try:
-        payload = jwt.decode(
+        # Fetch the signing key from Supabase JWKS endpoint
+        jwks_client = _get_jwks_client()
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+
+        payload = pyjwt.decode(
             token,
-            settings.jwt_secret,
-            algorithms=[settings.jwt_algorithm],
+            signing_key.key,
+            algorithms=["ES256", "HS256"],
             audience="authenticated",
+            issuer=f"{settings.supabase_url}/auth/v1",
+            leeway=30,  # allow 30s clock skew between local machine and Supabase
         )
-    except JWTError as e:
+    except pyjwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token has expired",
+        )
+    except pyjwt.InvalidTokenError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid token: {e}",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Token verification failed: {e}",
         )
 
     sub = payload.get("sub")

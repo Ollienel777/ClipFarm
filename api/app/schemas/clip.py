@@ -24,3 +24,7 @@ class ClipOut(BaseModel):
 
 class ClipTagRequest(BaseModel):
     player_id: uuid.UUID
+
+
+class ClipFixActionRequest(BaseModel):
+    action: str  # spike, serve, dig, set, block, not_an_action

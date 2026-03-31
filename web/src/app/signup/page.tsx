@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { AlertCircle, CheckCircle, Film } from "lucide-react";
+import { AlertCircle, CheckCircle, Zap } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { createClient } from "@/lib/supabase";
 
@@ -47,10 +47,12 @@ export default function SignupPage() {
     return (
       <div className="flex min-h-[70vh] items-center justify-center">
         <div className="w-full max-w-sm text-center">
-          <CheckCircle size={40} className="mx-auto mb-4 text-green-400" />
-          <h1 className="text-2xl font-bold text-zinc-100">Check your email</h1>
-          <p className="mt-2 text-sm text-zinc-400">
-            We sent a confirmation link to <strong className="text-zinc-200">{email}</strong>.
+          <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-500/10">
+            <CheckCircle size={24} className="text-emerald-400" />
+          </div>
+          <h1 className="text-xl font-bold text-foreground">Check your email</h1>
+          <p className="mt-2 text-sm text-muted">
+            We sent a confirmation link to <strong className="text-foreground">{email}</strong>.
             Click it to activate your account.
           </p>
           <Link href="/login">
@@ -67,14 +69,16 @@ export default function SignupPage() {
     <div className="flex min-h-[70vh] items-center justify-center">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <Film size={32} className="mx-auto mb-3 text-blue-400" />
-          <h1 className="text-2xl font-bold text-zinc-100">Create your account</h1>
-          <p className="mt-1 text-sm text-zinc-500">Start clipping volleyball highlights</p>
+          <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-brand/10">
+            <Zap size={20} className="text-brand" />
+          </div>
+          <h1 className="text-xl font-bold text-foreground">Create your account</h1>
+          <p className="mt-1 text-sm text-muted">Start clipping volleyball highlights</p>
         </div>
 
         <form onSubmit={handleSignup} className="space-y-4">
           <div>
-            <label htmlFor="email" className="block text-sm text-zinc-400 mb-1.5">
+            <label htmlFor="email" className="block text-xs font-medium text-muted mb-1.5">
               Email
             </label>
             <input
@@ -83,13 +87,13 @@ export default function SignupPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-xl border border-border bg-surface px-4 py-2.5 text-sm text-foreground placeholder:text-zinc-600 focus:border-brand/50 focus:outline-none focus:ring-1 focus:ring-brand/20 transition-colors"
               placeholder="you@example.com"
             />
           </div>
 
           <div>
-            <label htmlFor="password" className="block text-sm text-zinc-400 mb-1.5">
+            <label htmlFor="password" className="block text-xs font-medium text-muted mb-1.5">
               Password
             </label>
             <input
@@ -99,27 +103,27 @@ export default function SignupPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={6}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-xl border border-border bg-surface px-4 py-2.5 text-sm text-foreground placeholder:text-zinc-600 focus:border-brand/50 focus:outline-none focus:ring-1 focus:ring-brand/20 transition-colors"
               placeholder="At least 6 characters"
             />
           </div>
 
           {error && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-800 bg-red-950 px-3 py-2 text-sm text-red-400">
+            <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2.5 text-sm text-red-400">
               <AlertCircle size={14} className="shrink-0" />
               {error}
             </div>
           )}
 
           <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? "Creating account…" : "Create account"}
+            {loading ? "Creating account..." : "Create account"}
           </Button>
         </form>
 
         <div className="my-6 flex items-center gap-3">
-          <div className="h-px flex-1 bg-zinc-800" />
+          <div className="h-px flex-1 bg-border" />
           <span className="text-xs text-zinc-600">or</span>
-          <div className="h-px flex-1 bg-zinc-800" />
+          <div className="h-px flex-1 bg-border" />
         </div>
 
         <Button variant="secondary" className="w-full" onClick={handleGoogleSignup}>
@@ -144,9 +148,9 @@ export default function SignupPage() {
           Continue with Google
         </Button>
 
-        <p className="mt-6 text-center text-sm text-zinc-500">
+        <p className="mt-6 text-center text-sm text-muted">
           Already have an account?{" "}
-          <Link href="/login" className="text-blue-400 hover:text-blue-300">
+          <Link href="/login" className="font-medium text-brand hover:text-brand-light transition-colors">
             Log in
           </Link>
         </p>

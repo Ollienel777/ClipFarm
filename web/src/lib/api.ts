@@ -149,3 +149,10 @@ export function tagClip(clipId: string, playerId: string): Promise<Clip> {
     body: JSON.stringify({ player_id: playerId }),
   });
 }
+
+export function fixClipAction(clipId: string, action: string): Promise<Clip> {
+  return request<Clip>(`/clips/${clipId}/action`, {
+    method: "PATCH",
+    body: JSON.stringify({ action }),
+  });
+}

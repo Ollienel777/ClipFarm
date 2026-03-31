@@ -248,6 +248,10 @@ def _stub_detections(video_path: str) -> list[dict]:
     duration = total_frames / fps
 
     actions = ["spike", "serve", "dig", "set", "block"]
+    # Generate ~10-15 clips max, spread across the video
+    target_clips = min(15, max(3, int(duration / 60)))  # ~1 clip per minute, max 15
+    interval = max(10, int(duration / target_clips))
+    start_offset = min(5, duration * 0.05)
     return [
         {
             "start": max(0, t - 2),
@@ -255,5 +259,5 @@ def _stub_detections(video_path: str) -> list[dict]:
             "action": actions[i % len(actions)],
             "confidence": 0.75,
         }
-        for i, t in enumerate(range(30, int(duration) - 30, 60))
+        for i, t in enumerate(range(int(start_offset), max(int(start_offset) + 1, int(duration) - 2), interval))
     ]

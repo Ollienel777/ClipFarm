@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Upload, Film, AlertCircle } from "lucide-react";
+import { Upload, Film, AlertCircle, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { uploadGame } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -64,12 +64,12 @@ export function UploadZone() {
         onDragLeave={() => setDragging(false)}
         onDrop={onDrop}
         className={cn(
-          "relative flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-12 text-center transition-colors cursor-pointer",
+          "relative flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-14 text-center transition-all duration-200 cursor-pointer",
           dragging
-            ? "border-blue-500 bg-blue-500/10"
+            ? "border-brand bg-brand/5 scale-[1.01]"
             : file
-            ? "border-zinc-600 bg-zinc-900"
-            : "border-zinc-700 bg-zinc-900/50 hover:border-zinc-500 hover:bg-zinc-900"
+            ? "border-border-light bg-surface"
+            : "border-border bg-surface/50 hover:border-border-light hover:bg-surface"
         )}
         onClick={() => document.getElementById("file-input")?.click()}
       >
@@ -83,17 +83,21 @@ export function UploadZone() {
 
         {file ? (
           <>
-            <Film size={40} className="mb-3 text-blue-400" />
-            <p className="font-medium text-zinc-100">{file.name}</p>
-            <p className="mt-1 text-sm text-zinc-500">{formatBytes(file.size)}</p>
-            <p className="mt-2 text-xs text-zinc-600">Click to change file</p>
+            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-brand/10">
+              <Film size={22} className="text-brand" />
+            </div>
+            <p className="font-medium text-foreground">{file.name}</p>
+            <p className="mt-1 text-sm text-muted">{formatBytes(file.size)}</p>
+            <p className="mt-3 text-xs text-zinc-600 hover:text-muted transition-colors">Click to change file</p>
           </>
         ) : (
           <>
-            <Upload size={40} className="mb-3 text-zinc-500" />
-            <p className="font-medium text-zinc-200">Drop your game video here</p>
-            <p className="mt-1 text-sm text-zinc-500">
-              MP4, MOV, AVI, or WebM · up to {MAX_SIZE_GB} GB
+            <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-xl bg-surface-light">
+              <Upload size={22} className="text-muted" />
+            </div>
+            <p className="font-medium text-foreground">Drop your game video here</p>
+            <p className="mt-1 text-sm text-muted">
+              MP4, MOV, AVI, or WebM &middot; up to {MAX_SIZE_GB} GB
             </p>
           </>
         )}
@@ -102,7 +106,7 @@ export function UploadZone() {
       {/* Title input */}
       {file && (
         <div className="mt-4">
-          <label className="block text-sm text-zinc-400 mb-1.5" htmlFor="game-title">
+          <label className="block text-xs font-medium text-muted mb-1.5" htmlFor="game-title">
             Game title
           </label>
           <input
@@ -111,14 +115,14 @@ export function UploadZone() {
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="e.g. Varsity vs Lincoln — March 25"
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-blue-500 focus:outline-none"
+            className="w-full rounded-xl border border-border bg-surface px-4 py-2.5 text-sm text-foreground placeholder:text-zinc-600 focus:border-brand/50 focus:outline-none focus:ring-1 focus:ring-brand/20 transition-colors"
           />
         </div>
       )}
 
       {/* Error */}
       {error && (
-        <div className="mt-3 flex items-center gap-2 rounded-lg border border-red-800 bg-red-950 px-3 py-2 text-sm text-red-400">
+        <div className="mt-3 flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-2.5 text-sm text-red-400">
           <AlertCircle size={14} className="shrink-0" />
           {error}
         </div>
@@ -127,13 +131,13 @@ export function UploadZone() {
       {/* Progress bar */}
       {progress !== null && (
         <div className="mt-4">
-          <div className="flex justify-between text-xs text-zinc-500 mb-1">
-            <span>Uploading…</span>
-            <span>{progress}%</span>
+          <div className="flex justify-between text-xs text-muted mb-2">
+            <span>Uploading...</span>
+            <span className="tabular-nums">{progress}%</span>
           </div>
-          <div className="h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+          <div className="h-1 rounded-full bg-surface-light overflow-hidden">
             <div
-              className="h-full rounded-full bg-blue-500 transition-all"
+              className="h-full rounded-full bg-brand transition-all duration-300 ease-out"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -142,8 +146,7 @@ export function UploadZone() {
 
       {/* Upload button */}
       {file && progress === null && (
-        <Button className="mt-4 w-full" size="lg" onClick={handleUpload}>
-          <Upload size={16} />
+        <Button className="mt-5 w-full" size="lg" onClick={handleUpload}>
           Upload &amp; Process
         </Button>
       )}

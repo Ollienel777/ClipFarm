@@ -2,8 +2,8 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Loader } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { Volleyball } from "@/components/ui/Volleyball";
 
 export function RequireAuth({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -18,7 +18,7 @@ export function RequireAuth({ children }: { children: React.ReactNode }) {
   if (loading) {
     return (
       <div className="flex min-h-[50vh] items-center justify-center">
-        <Loader size={24} className="animate-spin text-zinc-500" />
+        <Volleyball size={32} />
       </div>
     );
   }

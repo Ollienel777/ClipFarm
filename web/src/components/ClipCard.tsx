@@ -1,20 +1,33 @@
 "use client";
 
 import { useState } from "react";
-import { Play, User } from "lucide-react";
+import { Play, User, Pencil } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
-import { type Clip, type Player, tagClip } from "@/lib/api";
+import { type Clip, type Player, type ActionType, tagClip, fixClipAction } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+const ACTION_OPTIONS: { value: string; label: string }[] = [
+  { value: "spike", label: "Spike" },
+  { value: "serve", label: "Serve" },
+  { value: "dig", label: "Dig" },
+  { value: "set", label: "Set" },
+  { value: "block", label: "Block" },
+  { value: "not_an_action", label: "Not an action" },
+];
 
 interface ClipCardProps {
   clip: Clip;
   players: Player[];
   onPlay: (clip: Clip) => void;
+  onUpdate?: (clip: Clip) => void;
 }
 
-export function ClipCard({ clip, players, onPlay }: ClipCardProps) {
+export function ClipCard({ clip, players, onPlay, onUpdate }: ClipCardProps) {
   const [tagging, setTagging] = useState(false);
+  const [fixing, setFixing] = useState(false);
   const [localPlayerName, setLocalPlayerName] = useState(clip.player_name);
+  const [localAction, setLocalAction] = useState(clip.action_type);
+  const [localConfidence, setLocalConfidence] = useState(clip.confidence);
 
   async function handleTag(playerId: string) {
     setTagging(false);
@@ -22,66 +35,119 @@ export function ClipCard({ clip, players, onPlay }: ClipCardProps) {
     setLocalPlayerName(updated.player_name);
   }
 
-  const confidencePct = Math.round(clip.confidence * 100);
+  async function handleFixAction(action: string) {
+    setFixing(false);
+    if (action === localAction) return;
+    try {
+      const updated = await fixClipAction(clip.id, action);
+      setLocalAction(updated.action_type);
+      setLocalConfidence(updated.confidence);
+      onUpdate?.(updated);
+    } catch (err) {
+      console.error("Fix action failed:", err);
+    }
+  }
+
+  const confidencePct = Math.round(localConfidence * 100);
+  const isDiscarded = localAction === "unknown" && localConfidence === 0;
 
   return (
-    <div className="group relative overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900 hover:border-zinc-600 transition-colors">
+    <div className={cn(
+      "group card-noise overflow-hidden rounded-xl border border-border bg-surface transition-all duration-200 hover:border-border-light hover:shadow-lg hover:shadow-black/20",
+      isDiscarded && "opacity-40"
+    )}>
       {/* Thumbnail */}
       <div
-        className="relative aspect-video cursor-pointer bg-zinc-950"
+        className="relative aspect-video cursor-pointer bg-black overflow-hidden"
         onClick={() => onPlay(clip)}
       >
         {clip.thumbnail_url ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={clip.thumbnail_url}
-            alt={`${clip.action_type} clip thumbnail`}
-            className="h-full w-full object-cover"
+            alt={`${localAction} clip thumbnail`}
+            className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
           />
         ) : (
-          <div className="flex h-full items-center justify-center text-zinc-700">
-            <Play size={32} />
+          <div className="flex h-full items-center justify-center bg-surface">
+            <Play size={28} className="text-zinc-700" />
           </div>
         )}
 
         {/* Play overlay */}
-        <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity">
-          <div className="rounded-full bg-white/20 p-3 backdrop-blur-sm">
-            <Play size={24} className="text-white fill-white" />
+        <div className="absolute inset-0 flex items-center justify-center bg-black/0 group-hover:bg-black/40 transition-all duration-200">
+          <div className="scale-75 opacity-0 group-hover:scale-100 group-hover:opacity-100 transition-all duration-200 rounded-full bg-white/15 p-3 backdrop-blur-sm">
+            <Play size={20} className="text-white fill-white" />
           </div>
         </div>
 
-        {/* Duration badge */}
-        <span className="absolute bottom-2 right-2 rounded bg-black/70 px-1.5 py-0.5 text-xs text-white">
+        {/* Duration */}
+        <span className="absolute bottom-2 right-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-medium text-white tabular-nums backdrop-blur-sm">
           {formatDuration(clip.end_time - clip.start_time)}
         </span>
+
+        {/* Action badge */}
+        <div className="absolute top-2 left-2">
+          <Badge label={isDiscarded ? "removed" : localAction} action={isDiscarded ? "unknown" : localAction as ActionType} />
+        </div>
       </div>
 
       {/* Info */}
-      <div className="p-3">
-        <div className="flex items-start justify-between gap-2">
-          <div className="flex flex-wrap gap-1.5">
-            <Badge label={clip.action_type} action={clip.action_type} />
+      <div className="px-3 py-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
             <span
               className={cn(
-                "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium",
+                "text-xs font-semibold tabular-nums",
                 confidencePct >= 80
-                  ? "text-green-400"
+                  ? "text-emerald-400"
                   : confidencePct >= 60
-                  ? "text-yellow-400"
+                  ? "text-amber-400"
                   : "text-zinc-500"
               )}
             >
               {confidencePct}%
             </span>
+            <span className="text-[11px] text-zinc-600">
+              {formatTimestamp(clip.start_time)}
+            </span>
           </div>
 
-          {/* Player tag */}
-          <div className="relative shrink-0">
+          <div className="flex items-center gap-1 shrink-0">
+            {/* Fix action */}
+            {fixing ? (
+              <select
+                autoFocus
+                className="rounded-md border border-border bg-surface-light px-2 py-1 text-xs text-foreground focus:outline-none focus:border-brand"
+                onBlur={() => setFixing(false)}
+                onChange={(e) => handleFixAction(e.target.value)}
+                defaultValue=""
+              >
+                <option value="" disabled>
+                  Fix action
+                </option>
+                {ACTION_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.value === localAction ? `${opt.label} (current)` : opt.label}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <button
+                onClick={() => setFixing(true)}
+                className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-surface-light hover:text-brand transition-colors"
+                title="Fix action type"
+              >
+                <Pencil size={10} />
+                Fix
+              </button>
+            )}
+
+            {/* Player tag */}
             {tagging ? (
               <select
                 autoFocus
-                className="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-100 focus:outline-none"
+                className="rounded-md border border-border bg-surface-light px-2 py-1 text-xs text-foreground focus:outline-none focus:border-brand"
                 onBlur={() => setTagging(false)}
                 onChange={(e) => handleTag(e.target.value)}
                 defaultValue=""
@@ -98,18 +164,14 @@ export function ClipCard({ clip, players, onPlay }: ClipCardProps) {
             ) : (
               <button
                 onClick={() => setTagging(true)}
-                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 transition-colors"
+                className="flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] text-zinc-500 hover:bg-surface-light hover:text-foreground transition-colors"
               >
-                <User size={12} />
-                {localPlayerName ?? "Tag player"}
+                <User size={11} />
+                {localPlayerName ?? "Tag"}
               </button>
             )}
           </div>
         </div>
-
-        <p className="mt-1.5 text-xs text-zinc-500">
-          {formatTimestamp(clip.start_time)}
-        </p>
       </div>
     </div>
   );

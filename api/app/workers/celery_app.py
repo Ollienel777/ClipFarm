@@ -1,3 +1,11 @@
+import sys
+from pathlib import Path
+
+# Add project root to path so `ml.pipeline` is importable from api/
+_project_root = str(Path(__file__).resolve().parents[3])
+if _project_root not in sys.path:
+    sys.path.insert(0, _project_root)
+
 from celery import Celery
 from app.config import settings
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Upload, Film, LogOut } from "lucide-react";
+import { Upload, LogOut, Zap } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -9,21 +9,25 @@ export function Navbar() {
   const { user, loading, signOut } = useAuth();
 
   return (
-    <header className="sticky top-0 z-40 border-b border-zinc-800 bg-zinc-950/80 backdrop-blur-md">
-      <div className="mx-auto flex h-14 max-w-7xl items-center justify-between px-4">
-        <Link href="/" className="flex items-center gap-2 font-semibold text-zinc-100">
-          <Film size={20} className="text-blue-400" />
-          ClipFarm
+    <header className="sticky top-0 z-40 border-b border-border/50 bg-background/80 backdrop-blur-xl">
+      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5">
+        <Link href="/" className="flex items-center gap-2.5 group">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-brand/10 group-hover:bg-brand/20 transition-colors">
+            <Zap size={16} className="text-brand" />
+          </div>
+          <span className="text-base font-bold tracking-tight text-foreground">
+            Clip<span className="text-brand">Farm</span>
+          </span>
         </Link>
 
-        <nav className="flex items-center gap-2">
+        <nav className="flex items-center gap-1">
           {loading ? (
-            <div className="h-8 w-20 animate-pulse rounded bg-zinc-800" />
+            <div className="h-8 w-24 shimmer rounded-lg" />
           ) : user ? (
             <>
               <Link
                 href="/games"
-                className="text-sm text-zinc-400 hover:text-zinc-100 transition-colors px-3"
+                className="rounded-lg px-3 py-2 text-sm font-medium text-muted hover:text-foreground hover:bg-surface-light transition-colors"
               >
                 My Games
               </Link>
@@ -33,12 +37,13 @@ export function Navbar() {
                   Upload
                 </Button>
               </Link>
+              <div className="ml-1 h-5 w-px bg-border" />
               <button
                 onClick={signOut}
-                className="ml-2 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
-                title={user.email ?? "Sign out"}
+                className="ml-1 flex items-center gap-2 rounded-lg px-2.5 py-2 text-sm text-muted hover:text-foreground hover:bg-surface-light transition-colors"
+                title="Sign out"
               >
-                <span className="hidden sm:inline max-w-[120px] truncate text-xs text-zinc-500">
+                <span className="hidden sm:inline max-w-[140px] truncate text-xs">
                   {user.email}
                 </span>
                 <LogOut size={14} />
@@ -52,7 +57,7 @@ export function Navbar() {
                 </Button>
               </Link>
               <Link href="/signup">
-                <Button size="sm">Sign up</Button>
+                <Button size="sm">Get started</Button>
               </Link>
             </>
           )}

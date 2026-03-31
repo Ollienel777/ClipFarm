@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { AlertCircle, Film } from "lucide-react";
+import { AlertCircle, Zap } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { createClient } from "@/lib/supabase";
 
@@ -43,14 +43,16 @@ export default function LoginPage() {
     <div className="flex min-h-[70vh] items-center justify-center">
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
-          <Film size={32} className="mx-auto mb-3 text-blue-400" />
-          <h1 className="text-2xl font-bold text-zinc-100">Welcome back</h1>
-          <p className="mt-1 text-sm text-zinc-500">Log in to your ClipFarm account</p>
+          <div className="mx-auto mb-4 flex h-11 w-11 items-center justify-center rounded-xl bg-brand/10">
+            <Zap size={20} className="text-brand" />
+          </div>
+          <h1 className="text-xl font-bold text-foreground">Welcome back</h1>
+          <p className="mt-1 text-sm text-muted">Log in to your ClipFarm account</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
           <div>
-            <label htmlFor="email" className="block text-sm text-zinc-400 mb-1.5">
+            <label htmlFor="email" className="block text-xs font-medium text-muted mb-1.5">
               Email
             </label>
             <input
@@ -59,13 +61,13 @@ export default function LoginPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-xl border border-border bg-surface px-4 py-2.5 text-sm text-foreground placeholder:text-zinc-600 focus:border-brand/50 focus:outline-none focus:ring-1 focus:ring-brand/20 transition-colors"
               placeholder="you@example.com"
             />
           </div>
 
           <div>
-            <label htmlFor="password" className="block text-sm text-zinc-400 mb-1.5">
+            <label htmlFor="password" className="block text-xs font-medium text-muted mb-1.5">
               Password
             </label>
             <input
@@ -75,27 +77,27 @@ export default function LoginPage() {
               onChange={(e) => setPassword(e.target.value)}
               required
               minLength={6}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm text-zinc-100 placeholder:text-zinc-600 focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-xl border border-border bg-surface px-4 py-2.5 text-sm text-foreground placeholder:text-zinc-600 focus:border-brand/50 focus:outline-none focus:ring-1 focus:ring-brand/20 transition-colors"
               placeholder="••••••••"
             />
           </div>
 
           {error && (
-            <div className="flex items-center gap-2 rounded-lg border border-red-800 bg-red-950 px-3 py-2 text-sm text-red-400">
+            <div className="flex items-center gap-2 rounded-xl border border-red-500/20 bg-red-500/5 px-3 py-2.5 text-sm text-red-400">
               <AlertCircle size={14} className="shrink-0" />
               {error}
             </div>
           )}
 
           <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? "Signing in…" : "Sign in"}
+            {loading ? "Signing in..." : "Sign in"}
           </Button>
         </form>
 
         <div className="my-6 flex items-center gap-3">
-          <div className="h-px flex-1 bg-zinc-800" />
+          <div className="h-px flex-1 bg-border" />
           <span className="text-xs text-zinc-600">or</span>
-          <div className="h-px flex-1 bg-zinc-800" />
+          <div className="h-px flex-1 bg-border" />
         </div>
 
         <Button variant="secondary" className="w-full" onClick={handleGoogleLogin}>
@@ -120,9 +122,9 @@ export default function LoginPage() {
           Continue with Google
         </Button>
 
-        <p className="mt-6 text-center text-sm text-zinc-500">
+        <p className="mt-6 text-center text-sm text-muted">
           Don&apos;t have an account?{" "}
-          <Link href="/signup" className="text-blue-400 hover:text-blue-300">
+          <Link href="/signup" className="font-medium text-brand hover:text-brand-light transition-colors">
             Sign up
           </Link>
         </p>

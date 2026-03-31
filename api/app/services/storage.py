@@ -42,6 +42,32 @@ def upload_fileobj(fileobj, key: str, content_type: str = "application/octet-str
     return f"{settings.r2_public_url}/{key}"
 
 
+def download_file(key: str, local_path: str | Path) -> None:
+    """Download a file from R2 to a local path using S3 API credentials."""
+    _client().download_file(settings.r2_bucket_name, key, str(local_path))
+
+
+def presign_url(key: str, expires_in: int = 3600) -> str:
+    """Generate a presigned URL for reading a file from R2 (default 1 hour)."""
+    return _client().generate_presigned_url(
+        "get_object",
+        Params={"Bucket": settings.r2_bucket_name, "Key": key},
+        ExpiresIn=expires_in,
+    )
+
+
+def presign_from_stored_url(stored_url: str, expires_in: int = 3600) -> str:
+    """Convert a stored public URL back to a presigned URL."""
+    prefix = f"{settings.r2_public_url}/"
+    if stored_url.startswith(prefix):
+        key = stored_url[len(prefix):]
+    else:
+        # Fallback: extract path from URL
+        from urllib.parse import urlparse
+        key = urlparse(stored_url).path.lstrip("/")
+    return presign_url(key, expires_in)
+
+
 def delete_file(key: str) -> None:
     _client().delete_object(Bucket=settings.r2_bucket_name, Key=key)
 

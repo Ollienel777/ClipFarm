@@ -48,10 +48,8 @@ def generate_clips(
                 .input(video_path, ss=start, t=duration)
                 .output(
                     str(clip_path),
-                    vcodec="libx264",
-                    acodec="aac",
-                    crf=28,           # Compress to keep file size reasonable
-                    preset="fast",
+                    vcodec="copy",
+                    acodec="copy",
                     movflags="+faststart",
                     loglevel="error",
                 )

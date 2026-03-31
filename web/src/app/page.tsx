@@ -1,73 +1,93 @@
 import Link from "next/link";
-import { Upload, Play, Filter, Users } from "lucide-react";
+import { Upload, Play, SlidersHorizontal, Users, ArrowRight, Zap } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 
 const FEATURES = [
   {
     icon: Upload,
-    title: "Upload game footage",
-    body: "Drop any MP4, MOV, or AVI file up to 15 GB. We handle the rest.",
+    title: "Drop your footage",
+    body: "Upload any MP4, MOV, or AVI up to 15 GB. Processing starts immediately.",
   },
   {
     icon: Play,
-    title: "Auto-generated highlights",
-    body: "YOLOv8 detects spikes, serves, digs, sets, and blocks automatically.",
+    title: "AI-powered detection",
+    body: "Pose estimation identifies spikes, serves, digs, sets, and blocks in real time.",
   },
   {
-    icon: Filter,
-    title: "Filter by action & player",
-    body: "Instantly filter your clip feed by action type, player, or confidence score.",
+    icon: SlidersHorizontal,
+    title: "Filter everything",
+    body: "Slice your clip feed by action type, player, or confidence threshold.",
   },
   {
     icon: Users,
-    title: "Player profiles",
-    body: "Jersey-number OCR links clips to players. Tag manually as a fallback.",
+    title: "Player tagging",
+    body: "Jersey-number OCR auto-links clips to player profiles. Manual tag as fallback.",
   },
 ];
 
 export default function HomePage() {
   return (
-    <div className="flex flex-col items-center text-center">
+    <div className="flex flex-col items-center">
       {/* Hero */}
-      <div className="mt-16 max-w-2xl">
-        <h1 className="text-5xl font-bold tracking-tight text-zinc-50">
-          Volleyball highlights,{" "}
-          <span className="text-blue-400">automatically</span>
-        </h1>
-        <p className="mt-4 text-lg text-zinc-400">
-          Upload a full game. Get a filterable feed of every spike, serve, dig,
-          set, and block — tagged by player.
-        </p>
-        <div className="mt-8 flex justify-center gap-3">
-          <Link href="/upload">
-            <Button size="lg">
-              <Upload size={16} />
-              Upload a game
-            </Button>
-          </Link>
-          <Link href="/games">
-            <Button size="lg" variant="secondary">
-              View my games
-            </Button>
-          </Link>
+      <div className="relative mt-20 max-w-2xl text-center">
+        {/* Background glow */}
+        <div className="absolute -top-32 left-1/2 -translate-x-1/2 h-64 w-96 bg-brand/8 blur-[100px] rounded-full pointer-events-none" />
+
+        <div className="relative">
+          <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-brand/20 bg-brand/5 px-4 py-1.5 text-xs font-medium text-brand">
+            <Zap size={12} />
+            Powered by YOLOv8 pose estimation
+          </div>
+
+          <h1 className="text-4xl sm:text-5xl font-extrabold tracking-tight leading-[1.1] text-foreground">
+            Your game footage,
+            <br />
+            <span className="bg-gradient-to-r from-brand to-orange-300 bg-clip-text text-transparent">
+              instant highlights
+            </span>
+          </h1>
+
+          <p className="mx-auto mt-5 max-w-md text-base text-muted leading-relaxed">
+            Upload a full volleyball game. Get a filterable feed of every spike,
+            serve, dig, set, and block — automatically tagged by player.
+          </p>
+
+          <div className="mt-8 flex justify-center gap-3">
+            <Link href="/upload">
+              <Button size="lg">
+                Upload a game
+                <ArrowRight size={14} />
+              </Button>
+            </Link>
+            <Link href="/games">
+              <Button size="lg" variant="secondary">
+                View my games
+              </Button>
+            </Link>
+          </div>
         </div>
       </div>
 
       {/* Features */}
-      <div className="mt-24 grid w-full max-w-4xl grid-cols-1 gap-6 sm:grid-cols-2">
+      <div className="mt-28 grid w-full max-w-3xl grid-cols-1 gap-3 sm:grid-cols-2">
         {FEATURES.map(({ icon: Icon, title, body }) => (
           <div
             key={title}
-            className="rounded-xl border border-zinc-800 bg-zinc-900 p-6 text-left"
+            className="card-noise group rounded-xl border border-border bg-surface p-5 transition-colors hover:border-border-light"
           >
-            <div className="mb-3 inline-flex rounded-lg border border-blue-500/20 bg-blue-500/10 p-2.5">
-              <Icon size={20} className="text-blue-400" />
+            <div className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-lg bg-brand/10 text-brand group-hover:bg-brand/15 transition-colors">
+              <Icon size={18} strokeWidth={2} />
             </div>
-            <h3 className="font-semibold text-zinc-100">{title}</h3>
-            <p className="mt-1.5 text-sm text-zinc-400">{body}</p>
+            <h3 className="text-sm font-semibold text-foreground">{title}</h3>
+            <p className="mt-1 text-sm leading-relaxed text-muted">{body}</p>
           </div>
         ))}
       </div>
+
+      {/* Footer hint */}
+      <p className="mt-20 mb-8 text-xs text-zinc-600">
+        Built for volleyball coaches, analysts, and players.
+      </p>
     </div>
   );
 }

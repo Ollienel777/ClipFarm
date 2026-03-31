@@ -4,55 +4,71 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-
-import httpx
+from urllib.parse import urlparse
 
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
 
 
+def _run_detection_modal(r2_key: str) -> list[dict]:
+    """Call the Modal GPU function and return detections."""
+    import modal
+    detect_fn = modal.Function.from_name("clipfarm-detect", "detect_actions")
+    return detect_fn.remote(r2_key)
+
+
+def _run_detection_local(video_path: str) -> list[dict]:
+    """Fallback: run detection locally (CPU, slow)."""
+    from ml.pipeline.detect import run_detection
+    return run_detection(video_path)
+
+
 @celery_app.task(bind=True, name="process_game", max_retries=2, default_retry_delay=60)
 def process_game_task(self, game_id: str, raw_video_url: str):
     """
     Main processing pipeline:
-    1. Download raw video from storage
-    2. Run ML detection (via Modal or local)
-    3. Generate clips with FFmpeg
+    1. Run ML detection via Modal GPU (or local fallback)
+    2. Download video + generate clips with FFmpeg
+    3. Upload clips to R2
     4. Persist clips to DB
     5. Update game status
     """
-    from app.workers._sync_db import sync_get_game, sync_set_game_status, sync_save_clips
+    from app.workers._sync_db import sync_set_game_status, sync_save_clips
     from app.services import storage as s3
 
     gid = uuid.UUID(game_id)
+    r2_key = urlparse(raw_video_url).path.lstrip("/")
     logger.info("Starting processing for game %s", game_id)
 
     try:
         sync_set_game_status(gid, "processing")
 
+        # ── 1. Run ML detection ───────────────────────────────────────────
+        # Try Modal GPU first, fall back to local
+        try:
+            logger.info("Running detection via Modal GPU...")
+            detections = _run_detection_modal(r2_key)
+            logger.info("Modal returned %d detections", len(detections))
+        except Exception as modal_err:
+            logger.warning("Modal failed (%s), falling back to local detection", modal_err)
+            # Need to download video for local detection
+            with tempfile.TemporaryDirectory() as tmpdir:
+                local_video = Path(tmpdir) / "game.mp4"
+                s3.download_file(r2_key, local_video)
+                detections = _run_detection_local(str(local_video))
+
+        # ── 2. Download video + generate clips with FFmpeg ────────────────
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
-
-            # ── 1. Download video ──────────────────────────────────────────────
             local_video = tmp / "game.mp4"
-            logger.info("Downloading %s", raw_video_url)
-            with httpx.stream("GET", raw_video_url) as r:
-                r.raise_for_status()
-                with open(local_video, "wb") as f:
-                    for chunk in r.iter_bytes():
-                        f.write(chunk)
+            logger.info("Downloading key=%s from R2 for clip generation", r2_key)
+            s3.download_file(r2_key, local_video)
 
-            # ── 2. Run ML detection ────────────────────────────────────────────
-            from ml.pipeline.detect import run_detection
-            detections = run_detection(str(local_video))
-            # detections: list[{start, end, action, confidence}]
-
-            # ── 3. Generate clips ──────────────────────────────────────────────
             from ml.pipeline.clip import generate_clips
             clips_data = generate_clips(str(local_video), detections, tmp)
 
-            # ── 4. Upload clips and thumbnails, save to DB ─────────────────────
+            # ── 3. Upload clips and thumbnails, save to DB ────────────────
             rows = []
             for cd in clips_data:
                 clip_id = uuid.uuid4()

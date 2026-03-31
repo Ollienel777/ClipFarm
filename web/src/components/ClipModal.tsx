@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { X, ChevronLeft, ChevronRight, Share2 } from "lucide-react";
+import { X, ChevronLeft, ChevronRight, Share2, Link2 } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { type Clip, getClipShareUrl } from "@/lib/api";
@@ -16,12 +16,10 @@ interface ClipModalProps {
 export function ClipModal({ clip, onClose, onPrev, onNext }: ClipModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
 
-  // Auto-play when clip changes
   useEffect(() => {
     videoRef.current?.play();
   }, [clip.id]);
 
-  // Keyboard shortcuts
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -44,29 +42,35 @@ export function ClipModal({ clip, onClose, onPrev, onNext }: ClipModalProps) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-md p-4"
       onClick={(e) => e.target === e.currentTarget && onClose()}
     >
-      <div className="relative w-full max-w-4xl rounded-2xl bg-zinc-950 border border-zinc-800 overflow-hidden">
+      <div className="relative w-full max-w-4xl rounded-2xl bg-background border border-border overflow-hidden shadow-2xl shadow-black/50">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-border">
           <div className="flex items-center gap-3">
             <Badge label={clip.action_type} action={clip.action_type} />
             {clip.player_name && (
-              <span className="text-sm text-zinc-400">{clip.player_name}</span>
+              <span className="text-sm font-medium text-foreground">{clip.player_name}</span>
             )}
-            <span className="text-xs text-zinc-600">
+            <span className="text-xs text-zinc-600 tabular-nums">
               {Math.round(clip.confidence * 100)}% confidence
             </span>
           </div>
-          <div className="flex items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={handleShare}>
-              <Share2 size={14} />
-              Share
-            </Button>
-            <Button variant="ghost" size="sm" onClick={onClose}>
-              <X size={14} />
-            </Button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={handleShare}
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted hover:text-foreground hover:bg-surface-light transition-colors"
+            >
+              <Link2 size={13} />
+              Copy link
+            </button>
+            <button
+              onClick={onClose}
+              className="flex items-center justify-center rounded-lg h-8 w-8 text-muted hover:text-foreground hover:bg-surface-light transition-colors"
+            >
+              <X size={16} />
+            </button>
           </div>
         </div>
 
@@ -76,7 +80,7 @@ export function ClipModal({ clip, onClose, onPrev, onNext }: ClipModalProps) {
             ref={videoRef}
             src={clip.clip_url}
             controls
-            className="w-full max-h-[70vh] object-contain"
+            className="w-full max-h-[75vh] object-contain"
             preload="auto"
           />
 
@@ -84,7 +88,7 @@ export function ClipModal({ clip, onClose, onPrev, onNext }: ClipModalProps) {
           {onPrev && (
             <button
               onClick={onPrev}
-              className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white hover:bg-black/70 transition-colors"
+              className="absolute left-3 top-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white/80 hover:bg-black/80 hover:text-white backdrop-blur-sm transition-all"
             >
               <ChevronLeft size={20} />
             </button>
@@ -92,7 +96,7 @@ export function ClipModal({ clip, onClose, onPrev, onNext }: ClipModalProps) {
           {onNext && (
             <button
               onClick={onNext}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/50 p-2 text-white hover:bg-black/70 transition-colors"
+              className="absolute right-3 top-1/2 -translate-y-1/2 flex h-10 w-10 items-center justify-center rounded-full bg-black/60 text-white/80 hover:bg-black/80 hover:text-white backdrop-blur-sm transition-all"
             >
               <ChevronRight size={20} />
             </button>

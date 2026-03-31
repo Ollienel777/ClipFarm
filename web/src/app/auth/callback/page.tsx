@@ -2,8 +2,8 @@
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Loader } from "lucide-react";
 import { createClient } from "@/lib/supabase";
+import { Volleyball } from "@/components/ui/Volleyball";
 
 export default function AuthCallbackPage() {
   const router = useRouter();
@@ -31,7 +31,7 @@ export default function AuthCallbackPage() {
   return (
     <div className="flex min-h-[70vh] items-center justify-center">
       <div className="text-center">
-        <Loader size={24} className="mx-auto mb-3 animate-spin text-blue-400" />
+        <Volleyball size={32} className="mx-auto mb-3" />
         <p className="text-sm text-zinc-400">Signing you in…</p>
       </div>
     </div>

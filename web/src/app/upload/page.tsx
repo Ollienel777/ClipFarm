@@ -7,13 +7,13 @@ export default function UploadPage() {
   return (
     <RequireAuth>
       <div className="flex flex-col items-center">
-        <h1 className="text-2xl font-bold text-zinc-100">Upload a game</h1>
-        <p className="mt-2 text-sm text-zinc-400">
-          We&apos;ll process your footage and generate a highlight clip feed in ~5–10 minutes per hour of footage.
-        </p>
-        <div className="mt-8 w-full max-w-xl">
-          <UploadZone />
+        <div className="text-center mb-8">
+          <h1 className="text-xl font-bold text-foreground">Upload a game</h1>
+          <p className="mt-1.5 text-sm text-muted">
+            Drop your footage and we&apos;ll generate a highlight reel automatically.
+          </p>
         </div>
+        <UploadZone />
       </div>
     </RequireAuth>
   );

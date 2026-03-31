@@ -1,13 +1,13 @@
 import { cn } from "@/lib/utils";
 import { type ActionType } from "@/lib/api";
 
-const ACTION_COLORS: Record<ActionType, string> = {
-  spike: "bg-red-500/20 text-red-400 border-red-500/30",
-  serve: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-  dig: "bg-green-500/20 text-green-400 border-green-500/30",
-  set: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-  block: "bg-orange-500/20 text-orange-400 border-orange-500/30",
-  unknown: "bg-zinc-500/20 text-zinc-400 border-zinc-500/30",
+const ACTION_STYLES: Record<ActionType, { bg: string; text: string; dot: string }> = {
+  spike:   { bg: "bg-red-500/10",    text: "text-red-400",    dot: "bg-red-400" },
+  serve:   { bg: "bg-blue-500/10",   text: "text-blue-400",   dot: "bg-blue-400" },
+  dig:     { bg: "bg-emerald-500/10", text: "text-emerald-400", dot: "bg-emerald-400" },
+  set:     { bg: "bg-violet-500/10", text: "text-violet-400", dot: "bg-violet-400" },
+  block:   { bg: "bg-orange-500/10", text: "text-orange-400", dot: "bg-orange-400" },
+  unknown: { bg: "bg-zinc-500/10",   text: "text-zinc-400",   dot: "bg-zinc-400" },
 };
 
 interface BadgeProps {
@@ -18,14 +18,19 @@ interface BadgeProps {
 }
 
 export function Badge({ label, action, className }: BadgeProps) {
+  const style = action ? ACTION_STYLES[action] : null;
+
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold uppercase tracking-wide",
-        action ? ACTION_COLORS[action] : "bg-zinc-700 text-zinc-300 border-zinc-600",
+        "inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider",
+        style
+          ? `${style.bg} ${style.text}`
+          : "bg-zinc-800 text-zinc-400",
         className
       )}
     >
+      {style && <span className={cn("h-1.5 w-1.5 rounded-full", style.dot)} />}
       {label}
     </span>
   );
