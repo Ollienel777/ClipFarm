@@ -37,6 +37,21 @@ def sync_set_game_status(
         s.commit()
 
 
+def sync_update_clip_url(
+    clip_id: uuid.UUID,
+    clip_url: str,
+    thumbnail_url: str | None = None,
+):
+    with Session(_engine) as s:
+        clip = s.get(Clip, clip_id)
+        if not clip:
+            return
+        clip.clip_url = clip_url
+        if thumbnail_url is not None:
+            clip.thumbnail_url = thumbnail_url
+        s.commit()
+
+
 def sync_save_clips(rows: list[dict]):
     with Session(_engine) as s:
         for row in rows:

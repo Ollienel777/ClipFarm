@@ -11,6 +11,39 @@ from app.workers.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
+@celery_app.task(bind=True, name="recut_clip", max_retries=2, default_retry_delay=30)
+def recut_clip_task(self, clip_id: str, game_id: str, raw_video_url: str, start: float, end: float):
+    """Re-cut a single clip from the source video after a trim adjustment."""
+    from app.workers._sync_db import sync_update_clip_url
+    from app.services import storage as s3
+    from ml.pipeline.clip import recut_single
+
+    cid = uuid.UUID(clip_id)
+    gid = uuid.UUID(game_id)
+    r2_key = urlparse(raw_video_url).path.lstrip("/")
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            local_video = tmp / "game.mp4"
+            logger.info("Downloading source video for recut of clip %s", clip_id)
+            s3.download_file(r2_key, local_video)
+
+            clip_path, thumb_path = recut_single(str(local_video), start, end, tmp)
+
+            # Upload new clip + thumbnail
+            clip_url = s3.upload_file(clip_path, s3.clip_key(gid, cid), "video/mp4")
+            thumb_url = None
+            if thumb_path:
+                thumb_url = s3.upload_file(thumb_path, s3.thumbnail_key(gid, cid), "image/jpeg")
+
+            sync_update_clip_url(cid, clip_url, thumb_url)
+            logger.info("Recut complete for clip %s", clip_id)
+    except Exception as exc:
+        logger.exception("Recut failed for clip %s", clip_id)
+        raise self.retry(exc=exc)
+
+
 def _run_detection_modal(r2_key: str) -> list[dict]:
     """Call the Modal GPU function and return detections."""
     import modal

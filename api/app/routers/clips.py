@@ -12,7 +12,8 @@ from app.database import get_db
 from app.models.clip import Clip, ActionType
 from app.models.correction import Correction
 from app.models.player import Player
-from app.schemas.clip import ClipOut, ClipTagRequest, ClipFixActionRequest
+from app.models.game import Game
+from app.schemas.clip import ClipOut, ClipTagRequest, ClipLabelsRequest, ClipTrimRequest
 from app.services import storage
 
 router = APIRouter(tags=["clips"])
@@ -149,46 +150,117 @@ async def tag_clip(clip_id: uuid.UUID, body: ClipTagRequest, db: DB):
     return out
 
 
-VALID_ACTIONS = {"spike", "serve", "dig", "set", "block", "not_an_action"}
+VALID_LABELS = {"spike", "serve", "dig", "set", "block", "not_an_action"}
 
 
-@router.patch("/clips/{clip_id}/action", response_model=ClipOut)
-async def fix_clip_action(
+@router.patch("/clips/{clip_id}/labels", response_model=ClipOut)
+async def update_clip_labels(
     clip_id: uuid.UUID,
-    body: ClipFixActionRequest,
+    body: ClipLabelsRequest,
     db: DB,
     user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    """Let a user correct a clip's action type. Stores the correction as training data."""
-    if body.action not in VALID_ACTIONS:
-        raise HTTPException(status_code=400, detail=f"Invalid action. Must be one of: {VALID_ACTIONS}")
+    """Set up to 2 action labels on a clip. Saves correction as ML training data."""
+    invalid = set(body.labels) - VALID_LABELS
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid labels: {invalid}. Must be from: {VALID_LABELS}")
+
+    clean_labels = [l for l in body.labels if l != "not_an_action"]
+    if len(clean_labels) > 2:
+        raise HTTPException(status_code=400, detail="Maximum 2 action labels per clip")
 
     clip = await db.get(Clip, clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
 
-    # Save the correction as training data
+    # Determine labels for correction record (preserve user selection order)
+    user_labels = body.labels
+    label_1 = user_labels[0] if len(user_labels) > 0 else "not_an_action"
+    label_2 = user_labels[1] if len(user_labels) > 1 else None
+
+    # Save correction as ML training data
     correction = Correction(
         clip_id=clip.id,
         user_id=user_id,
         original_action=clip.action_type,
-        corrected_action=body.action,
+        corrected_label_1=label_1,
+        corrected_label_2=label_2,
         original_confidence=clip.confidence,
         start_time=clip.start_time,
         end_time=clip.end_time,
     )
     db.add(correction)
 
-    # Update the clip's action type (or mark as hidden if "not_an_action")
-    if body.action == "not_an_action":
+    # Update labels on clip
+    clip.labels = list(set(clean_labels))
+
+    # Update primary action type based on labels
+    if "not_an_action" in body.labels or not clean_labels:
         clip.action_type = ActionType.unknown
         clip.confidence = 0.0
     else:
-        clip.action_type = ActionType(body.action)
-        clip.confidence = 1.0  # User-verified = 100% confidence
+        clip.action_type = ActionType(clean_labels[0])
+        clip.confidence = 1.0
 
     await db.commit()
     await db.refresh(clip)
+
+    out = ClipOut.model_validate(clip)
+    urls = _rewrite_urls(clip)
+    out.clip_url = urls["clip_url"]
+    out.thumbnail_url = urls["thumbnail_url"]
+    return out
+
+
+TRIM_STEP = 2.0  # seconds
+MAX_CLIP_DURATION = 30.0
+MIN_CLIP_DURATION = 1.0
+
+
+@router.patch("/clips/{clip_id}/trim", response_model=ClipOut)
+async def trim_clip(
+    clip_id: uuid.UUID,
+    body: ClipTrimRequest,
+    db: DB,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+):
+    """
+    Adjust a clip's start/end time and re-cut the video from the source.
+
+    start_delta: negative = extend earlier, positive = shrink from start
+    end_delta:   positive = extend later, negative = shrink from end
+    """
+    clip = await db.get(Clip, clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+
+    game = await db.get(Game, clip.game_id)
+    if not game or not game.raw_video_url:
+        raise HTTPException(status_code=400, detail="Source video not available for trimming")
+
+    new_start = max(0, clip.start_time + body.start_delta)
+    new_end = clip.end_time + body.end_delta
+    if new_end <= new_start:
+        raise HTTPException(status_code=400, detail="End time must be after start time")
+
+    duration = new_end - new_start
+    if duration < MIN_CLIP_DURATION:
+        raise HTTPException(status_code=400, detail=f"Clip too short (min {MIN_CLIP_DURATION}s)")
+    if duration > MAX_CLIP_DURATION:
+        raise HTTPException(status_code=400, detail=f"Clip too long (max {MAX_CLIP_DURATION}s)")
+
+    # Update times in DB
+    clip.start_time = new_start
+    clip.end_time = new_end
+    await db.commit()
+    await db.refresh(clip)
+
+    # Kick off background re-cut via Celery
+    from app.workers.celery_app import celery_app
+    celery_app.send_task(
+        "recut_clip",
+        args=[str(clip.id), str(clip.game_id), game.raw_video_url, new_start, new_end],
+    )
 
     out = ClipOut.model_validate(clip)
     urls = _rewrite_urls(clip)

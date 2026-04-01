@@ -103,6 +103,7 @@ export interface Clip {
   end_time: number;
   clip_url: string;
   thumbnail_url: string;
+  labels: string[];
   created_at: string;
 }
 
@@ -150,9 +151,16 @@ export function tagClip(clipId: string, playerId: string): Promise<Clip> {
   });
 }
 
-export function fixClipAction(clipId: string, action: string): Promise<Clip> {
-  return request<Clip>(`/clips/${clipId}/action`, {
+export function updateClipLabels(clipId: string, labels: string[]): Promise<Clip> {
+  return request<Clip>(`/clips/${clipId}/labels`, {
     method: "PATCH",
-    body: JSON.stringify({ action }),
+    body: JSON.stringify({ labels }),
+  });
+}
+
+export function trimClip(clipId: string, startDelta: number, endDelta: number): Promise<Clip> {
+  return request<Clip>(`/clips/${clipId}/trim`, {
+    method: "PATCH",
+    body: JSON.stringify({ start_delta: startDelta, end_delta: endDelta }),
   });
 }

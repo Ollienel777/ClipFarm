@@ -19,6 +19,7 @@ class ClipOut(BaseModel):
     end_time: float
     clip_url: str
     thumbnail_url: str | None
+    labels: list[str] = []
     created_at: datetime
 
 
@@ -28,3 +29,12 @@ class ClipTagRequest(BaseModel):
 
 class ClipFixActionRequest(BaseModel):
     action: str  # spike, serve, dig, set, block, not_an_action
+
+
+class ClipLabelsRequest(BaseModel):
+    labels: list[str]  # e.g. ["spike", "dig"]
+
+
+class ClipTrimRequest(BaseModel):
+    start_delta: float  # seconds to add/subtract from start (negative = extend earlier)
+    end_delta: float    # seconds to add/subtract from end (positive = extend later)

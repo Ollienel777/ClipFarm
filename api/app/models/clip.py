@@ -2,7 +2,7 @@ import uuid
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Float, DateTime, ForeignKey, Enum as SAEnum
+from sqlalchemy import String, Float, DateTime, ForeignKey, Enum as SAEnum, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -35,6 +35,9 @@ class Clip(Base):
     end_time: Mapped[float] = mapped_column(Float, nullable=False)
     clip_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     thumbnail_url: Mapped[str | None] = mapped_column(String(2048))
+    labels: Mapped[list[str]] = mapped_column(
+        ARRAY(String(50)), nullable=False, server_default="{}"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

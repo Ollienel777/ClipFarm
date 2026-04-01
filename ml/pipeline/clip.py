@@ -81,3 +81,50 @@ def generate_clips(
         })
 
     return results
+
+
+def recut_single(
+    video_path: str,
+    start: float,
+    end: float,
+    output_dir: Path,
+) -> tuple[Path, Path | None]:
+    """
+    Re-cut a single clip from the source video.
+    Returns (clip_path, thumb_path or None).
+    """
+    import ffmpeg
+
+    clip_path = output_dir / "recut.mp4"
+    thumb_path = output_dir / "recut.jpg"
+    duration = end - start
+    mid = start + duration / 2
+
+    (
+        ffmpeg
+        .input(video_path, ss=start, t=duration)
+        .output(
+            str(clip_path),
+            vcodec="copy",
+            acodec="copy",
+            movflags="+faststart",
+            loglevel="error",
+        )
+        .overwrite_output()
+        .run()
+    )
+
+    thumb_ok = False
+    try:
+        (
+            ffmpeg
+            .input(video_path, ss=mid)
+            .output(str(thumb_path), vframes=1, loglevel="error")
+            .overwrite_output()
+            .run()
+        )
+        thumb_ok = True
+    except Exception:
+        logger.warning("Thumbnail extraction failed for recut at %.1f", mid)
+
+    return clip_path, thumb_path if thumb_ok else None

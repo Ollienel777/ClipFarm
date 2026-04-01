@@ -20,7 +20,8 @@ class Correction(Base):
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
     original_action: Mapped[ActionType] = mapped_column(SAEnum(ActionType), nullable=False)
-    corrected_action: Mapped[str] = mapped_column(String(50), nullable=False)  # includes "not_an_action"
+    corrected_label_1: Mapped[str] = mapped_column(String(50), nullable=False)
+    corrected_label_2: Mapped[str | None] = mapped_column(String(50), nullable=True)
     original_confidence: Mapped[float] = mapped_column(Float, nullable=False)
     start_time: Mapped[float] = mapped_column(Float, nullable=False)
     end_time: Mapped[float] = mapped_column(Float, nullable=False)
