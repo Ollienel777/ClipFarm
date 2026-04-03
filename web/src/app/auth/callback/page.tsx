@@ -14,14 +14,14 @@ export default function AuthCallbackPage() {
     // Supabase puts tokens in the URL hash after OAuth redirect.
     // The client library picks them up automatically via onAuthStateChange,
     // but we need to wait for the session to be established.
-    supabase.auth.onAuthStateChange((event) => {
+    supabase.auth.onAuthStateChange((event: string) => {
       if (event === "SIGNED_IN" || event === "TOKEN_REFRESHED") {
         router.replace("/games");
       }
     });
 
     // Fallback: if already signed in (hash already consumed)
-    supabase.auth.getSession().then(({ data }) => {
+    supabase.auth.getSession().then(({ data }: { data: { session: unknown } }) => {
       if (data.session) {
         router.replace("/games");
       }

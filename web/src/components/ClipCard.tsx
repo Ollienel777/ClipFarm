@@ -26,6 +26,7 @@ export function ClipCard({ clip, players, onPlay, onUpdate }: ClipCardProps) {
   const [localStart, setLocalStart] = useState(clip.start_time);
   const [localEnd, setLocalEnd] = useState(clip.end_time);
   const [trimLoading, setTrimLoading] = useState(false);
+  const [labelLoading, setLabelLoading] = useState(false);
 
   async function handleTag(playerId: string) {
     setTagging(false);
@@ -34,23 +35,28 @@ export function ClipCard({ clip, players, onPlay, onUpdate }: ClipCardProps) {
   }
 
   async function handleToggleLabel(label: string) {
+    if (labelLoading) return;
+
     let next: string[];
     if (label === "not_an_action") {
-      // "Not an action" is exclusive — clears all others
-      next = localLabels.includes("not_an_action") ? [] : ["not_an_action"];
+      next = ["not_an_action"];
     } else {
-      // Remove "not_an_action" if selecting a real action
       const without = localLabels.filter((l) => l !== "not_an_action");
       if (without.includes(label)) {
         next = without.filter((l) => l !== label);
       } else if (without.length >= 2) {
-        // Max 2 labels — replace the oldest one
         next = [without[1], label];
       } else {
         next = [...without, label];
       }
     }
+    if (next.length === 0) {
+      next = ["not_an_action"];
+    }
+
+    const prev = localLabels;
     setLocalLabels(next);
+    setLabelLoading(true);
     try {
       const updated = await updateClipLabels(clip.id, next);
       setLocalLabels(updated.labels);
@@ -59,7 +65,9 @@ export function ClipCard({ clip, players, onPlay, onUpdate }: ClipCardProps) {
       onUpdate?.(updated);
     } catch (err) {
       console.error("Label update failed:", err);
-      setLocalLabels(localLabels); // revert
+      setLocalLabels(prev);
+    } finally {
+      setLabelLoading(false);
     }
   }
 
@@ -78,7 +86,7 @@ export function ClipCard({ clip, players, onPlay, onUpdate }: ClipCardProps) {
   }
 
   const confidencePct = Math.round(localConfidence * 100);
-  const isDiscarded = localAction === "unknown" && localConfidence === 0;
+  const isDiscarded = localLabels.includes("not_an_action") || (localAction === "unknown" && localConfidence === 0);
   const duration = localEnd - localStart;
   const displayLabels = localLabels.filter((l) => l !== "not_an_action");
 
@@ -155,7 +163,17 @@ export function ClipCard({ clip, players, onPlay, onUpdate }: ClipCardProps) {
           <div className="flex items-center gap-1 shrink-0">
             {/* Labels toggle */}
             <button
-              onClick={() => { setLabeling(!labeling); setTrimming(false); }}
+              onClick={() => {
+                if (!labeling) {
+                  // Seed labels with current action when opening panel
+                  // but not if already explicitly labeled or marked as not_an_action
+                  if (localLabels.length === 0 && localAction !== "unknown") {
+                    setLocalLabels([localAction]);
+                  }
+                }
+                setLabeling(!labeling);
+                setTrimming(false);
+              }}
               className={cn(
                 "flex items-center gap-1 rounded-md px-1.5 py-1 text-[11px] transition-colors",
                 labeling ? "bg-brand/10 text-brand" : "text-zinc-500 hover:bg-surface-light hover:text-brand"
@@ -220,9 +238,10 @@ export function ClipCard({ clip, players, onPlay, onUpdate }: ClipCardProps) {
               return (
                 <button
                   key={label}
+                  disabled={labelLoading}
                   onClick={() => handleToggleLabel(label)}
                   className={cn(
-                    "rounded-md px-2 py-1 text-[11px] font-medium capitalize transition-all",
+                    "rounded-md px-2 py-1 text-[11px] font-medium capitalize transition-all disabled:opacity-50",
                     active && isNotAction
                       ? "bg-red-500/20 text-red-400 ring-1 ring-red-500/40"
                       : active

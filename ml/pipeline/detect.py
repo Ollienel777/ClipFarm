@@ -232,7 +232,7 @@ def _merge_detections(
         best_conf = min(action_scores[best_action] / len(group), 0.95)
         peak_time = max(group, key=lambda x: x[2])[0]
 
-        d = Detection(peak_time=peak_time, action=best_action, confidence=best_conf)
+        d = Detection(peak_time=peak_time, action=best_action, confidence=best_conf)  # type: ignore[arg-type]
         d.end = min(d.end, video_duration)
         detections.append(d)
 

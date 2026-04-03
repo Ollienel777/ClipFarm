@@ -139,7 +139,17 @@
       "Bash(powershell.exe -Command \"where.exe ffmpeg\")",
       "Bash(curl -s -X PATCH http://localhost:8000/clips/f5793f41-7f20-4560-b634-404d7c282f78/labels -H \"Content-Type: application/json\" -d '{\"\"labels\"\": [\"\"spike\"\", \"\"dig\"\"]}')",
       "Bash(powershell.exe -Command \"cd ''C:\\\\Users\\\\nelso\\\\Documents\\\\GitProjs\\\\ClipFarm\\\\api''; python -c ''from app.workers._sync_db import _engine; from sqlalchemy.orm import Session; from sqlalchemy import text; s=Session\\(_engine\\); r=s.execute\\(text\\(chr\\(34\\)*3+\"\"SELECT column_name, data_type, character_maximum_length FROM information_schema.columns WHERE table_name = %s ORDER BY ordinal_position\"\"+chr\\(34\\)*3\\), {\"\"table_name_1\"\": \"\"corrections\"\"}\\); [print\\(row\\) for row in r]; s.close\\(\\)''\")",
-      "Bash(python3 -c \":*)"
+      "Bash(python3 -c \":*)",
+      "Bash(curl -s -X PATCH http://localhost:8000/clips/f5793f41-7f20-4560-b634-404d7c282f78/labels -H \"Content-Type: application/json\" -d '{\"\"labels\"\": [\"\"not_an_action\"\"]}')",
+      "Bash(powershell.exe -Command \"Get-ChildItem -Path ''C:\\\\Users\\\\nelso\\\\Documents\\\\GitProjs\\\\ClipFarm\\\\api\\\\app\\\\routers\\\\__pycache__'' -ErrorAction SilentlyContinue | Select-Object Name, LastWriteTime\")",
+      "Bash(powershell.exe -Command \"\\(Get-Item ''C:\\\\Users\\\\nelso\\\\Documents\\\\GitProjs\\\\ClipFarm\\\\api\\\\app\\\\routers\\\\clips.py''\\).LastWriteTime\")",
+      "Bash(powershell.exe -Command \"cd ''C:\\\\Users\\\\nelso\\\\Documents\\\\GitProjs\\\\ClipFarm\\\\api''; python -c \"\"from app.routers.clips import VALID_LABELS; print\\(''VALID_LABELS:'', VALID_LABELS\\)\"\"\")",
+      "Bash(taskkill //PID 32780 //F)",
+      "Bash(python -m ruff check .)",
+      "Bash(npx tsc:*)",
+      "Bash(pip show:*)",
+      "Bash(ruff check:*)",
+      "Bash(python -m mypy api/app --ignore-missing-imports)"
     ]
   }
 }

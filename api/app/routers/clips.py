@@ -23,7 +23,7 @@ DB = Annotated[AsyncSession, Depends(get_db)]
 API_BASE = "http://localhost:8000"
 
 
-def _rewrite_urls(clip: Clip) -> dict[str, str]:
+def _rewrite_urls(clip: Clip) -> dict[str, str | None]:
     """Replace stored R2 URLs with our proxy endpoints."""
     return {
         "clip_url": f"{API_BASE}/media/clips/{clip.id}.mp4",
@@ -71,7 +71,7 @@ async def list_clips(
         d = ClipOut.model_validate(c)
         d.player_name = player_map.get(c.player_id) if c.player_id else None  # type: ignore[arg-type]
         urls = _rewrite_urls(c)
-        d.clip_url = urls["clip_url"]
+        d.clip_url = urls["clip_url"]  # type: ignore[assignment]
         d.thumbnail_url = urls["thumbnail_url"]
         out.append(d)
     return out
@@ -165,7 +165,7 @@ async def update_clip_labels(
     if invalid:
         raise HTTPException(status_code=400, detail=f"Invalid labels: {invalid}. Must be from: {VALID_LABELS}")
 
-    clean_labels = [l for l in body.labels if l != "not_an_action"]
+    clean_labels = [lb for lb in body.labels if lb != "not_an_action"]
     if len(clean_labels) > 2:
         raise HTTPException(status_code=400, detail="Maximum 2 action labels per clip")
 
@@ -178,21 +178,35 @@ async def update_clip_labels(
     label_1 = user_labels[0] if len(user_labels) > 0 else "not_an_action"
     label_2 = user_labels[1] if len(user_labels) > 1 else None
 
-    # Save correction as ML training data
-    correction = Correction(
-        clip_id=clip.id,
-        user_id=user_id,
-        original_action=clip.action_type,
-        corrected_label_1=label_1,
-        corrected_label_2=label_2,
-        original_confidence=clip.confidence,
-        start_time=clip.start_time,
-        end_time=clip.end_time,
-    )
-    db.add(correction)
+    # Upsert correction — one row per clip per user
+    existing = (await db.execute(
+        select(Correction).where(
+            Correction.clip_id == clip.id,
+            Correction.user_id == user_id,
+        )
+    )).scalar_one_or_none()
 
-    # Update labels on clip
-    clip.labels = list(set(clean_labels))
+    if existing:
+        existing.corrected_label_1 = label_1
+        existing.corrected_label_2 = label_2
+    else:
+        correction = Correction(
+            clip_id=clip.id,
+            user_id=user_id,
+            original_action=clip.action_type,
+            corrected_label_1=label_1,
+            corrected_label_2=label_2,
+            original_confidence=clip.confidence,
+            start_time=clip.start_time,
+            end_time=clip.end_time,
+        )
+        db.add(correction)
+
+    # Update labels on clip (keep "not_an_action" so frontend knows it was explicit)
+    if "not_an_action" in body.labels:
+        clip.labels = ["not_an_action"]
+    else:
+        clip.labels = list(set(clean_labels))
 
     # Update primary action type based on labels
     if "not_an_action" in body.labels or not clean_labels:
@@ -207,7 +221,7 @@ async def update_clip_labels(
 
     out = ClipOut.model_validate(clip)
     urls = _rewrite_urls(clip)
-    out.clip_url = urls["clip_url"]
+    out.clip_url = urls["clip_url"]  # type: ignore[assignment]
     out.thumbnail_url = urls["thumbnail_url"]
     return out
 
@@ -264,7 +278,7 @@ async def trim_clip(
 
     out = ClipOut.model_validate(clip)
     urls = _rewrite_urls(clip)
-    out.clip_url = urls["clip_url"]
+    out.clip_url = urls["clip_url"]  # type: ignore[assignment]
     out.thumbnail_url = urls["thumbnail_url"]
     return out
 
