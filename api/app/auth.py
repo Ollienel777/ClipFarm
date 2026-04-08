@@ -10,18 +10,21 @@ Usage in routers:
     async def endpoint(user_id: uuid.UUID = Depends(get_current_user_id)):
         ...
 """
+import logging
 import uuid
 
 import jwt as pyjwt
 from jwt import PyJWKClient
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
 from app.models.user import User
+
+logger = logging.getLogger(__name__)
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -39,10 +42,11 @@ def _get_jwks_client() -> PyJWKClient:
 
 async def _ensure_user_exists(user_id: uuid.UUID, email: str, db: AsyncSession) -> None:
     """Create a users row if one doesn't exist yet (first login after Supabase signup)."""
-    result = await db.execute(select(User).where(User.id == user_id))
-    if result.scalar_one_or_none() is None:
-        db.add(User(id=user_id, email=email))
-        await db.commit()
+    stmt = pg_insert(User).values(id=user_id, email=email).on_conflict_do_nothing(
+        index_elements=["id"]
+    )
+    await db.execute(stmt)
+    await db.commit()
 
 
 async def get_current_user_id(
@@ -59,11 +63,20 @@ async def get_current_user_id(
     DEV_USER_ID = uuid.UUID("00000000-0000-0000-0000-000000000001")
 
     if credentials is None:
-        if not settings.supabase_url:
+        # Dev fallback ONLY when explicitly enabled
+        if settings.debug and not settings.supabase_url:
             return DEV_USER_ID
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Missing authorization header",
+        )
+
+    if not settings.supabase_url:
+        # Refuse to verify tokens without a configured issuer
+        logger.error("Auth attempted but supabase_url is not configured")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authentication is not configured",
         )
 
     token = credentials.credentials
@@ -75,7 +88,7 @@ async def get_current_user_id(
         payload = pyjwt.decode(
             token,
             signing_key.key,
-            algorithms=["ES256", "HS256"],
+            algorithms=["ES256"],
             audience="authenticated",
             issuer=f"{settings.supabase_url}/auth/v1",
             leeway=30,  # allow 30s clock skew between local machine and Supabase
@@ -85,15 +98,17 @@ async def get_current_user_id(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Token has expired",
         )
-    except pyjwt.InvalidTokenError as e:
+    except pyjwt.InvalidTokenError:
+        logger.warning("Invalid JWT presented", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Invalid token: {e}",
+            detail="Invalid token",
         )
-    except Exception as e:
+    except Exception:
+        logger.exception("Token verification failed")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Token verification failed: {e}",
+            detail="Token verification failed",
         )
 
     sub = payload.get("sub")

@@ -5,6 +5,7 @@ import { X, ChevronLeft, ChevronRight, Share2, Link2 } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { type Clip, getClipShareUrl } from "@/lib/api";
+import { useAuthedMedia } from "@/lib/useAuthedMedia";
 
 interface ClipModalProps {
   clip: Clip;
@@ -15,6 +16,7 @@ interface ClipModalProps {
 
 export function ClipModal({ clip, onClose, onPrev, onNext }: ClipModalProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const videoSrc = useAuthedMedia(clip.clip_url);
 
   useEffect(() => {
     videoRef.current?.play();
@@ -78,7 +80,7 @@ export function ClipModal({ clip, onClose, onPrev, onNext }: ClipModalProps) {
         <div className="relative bg-black">
           <video
             ref={videoRef}
-            src={clip.clip_url}
+            src={videoSrc}
             controls
             className="w-full max-h-[75vh] object-contain"
             preload="auto"

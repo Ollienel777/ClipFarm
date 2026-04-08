@@ -149,7 +149,8 @@
       "Bash(npx tsc:*)",
       "Bash(pip show:*)",
       "Bash(ruff check:*)",
-      "Bash(python -m mypy api/app --ignore-missing-imports)"
+      "Bash(python -m mypy api/app --ignore-missing-imports)",
+      "Bash(python -m mypy app --ignore-missing-imports)"
     ]
   }
 }

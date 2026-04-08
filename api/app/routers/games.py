@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import Annotated
 
@@ -6,12 +7,15 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user_id
+from app.config import settings
 from app.database import get_db
 from app.models.game import Game, GameStatus
 from app.models.clip import Clip
 from app.schemas.game import GameOut
 from app.services import storage
 from app.workers.tasks import process_game_task
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/games", tags=["games"])
 
@@ -60,16 +64,35 @@ async def get_game(game_id: uuid.UUID, user_id: UserId, db: DB):
 async def create_game(
     user_id: UserId,
     file: Annotated[UploadFile, File(description="Game video file")],
-    title: Annotated[str, Form()],
+    title: Annotated[str, Form(max_length=255)],
     db: DB,
 ):
+    # Validate content type
+    content_type = (file.content_type or "").lower()
+    if content_type not in settings.allowed_content_types_set:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported file type. Allowed: {sorted(settings.allowed_content_types_set)}",
+        )
+
+    # Validate size (Content-Length header is advisory; enforce hard limit during upload too)
+    if file.size is not None and file.size > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Max {settings.max_upload_bytes // (1024 * 1024)} MB",
+        )
+
+    # Sanitize filename — strip path separators
+    safe_filename = (file.filename or "upload.mp4").replace("/", "_").replace("\\", "_").replace("..", "_")
+
     game_id = uuid.uuid4()
-    key = storage.game_raw_key(game_id, file.filename or "upload.mp4")
+    key = storage.game_raw_key(game_id, safe_filename)
 
     try:
-        raw_url = storage.upload_fileobj(file.file, key, content_type=file.content_type or "video/mp4")
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Storage upload failed: {exc}") from exc
+        raw_url = storage.upload_fileobj(file.file, key, content_type=content_type)
+    except Exception:
+        logger.exception("Storage upload failed for game %s", game_id)
+        raise HTTPException(status_code=500, detail="Storage upload failed")
 
     game = Game(
         id=game_id,

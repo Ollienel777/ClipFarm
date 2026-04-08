@@ -4,17 +4,34 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
+    # Environment
+    debug: bool = False  # Enables dev fallbacks (DEV_USER_ID auth, etc.)
+    api_base_url: str = "http://localhost:8000"
+    cors_origins: str = "http://localhost:3000"  # comma-separated
+
+    # Upload limits
+    max_upload_bytes: int = 2 * 1024 * 1024 * 1024  # 2 GB
+    allowed_upload_content_types: str = "video/mp4,video/quicktime,video/x-matroska,video/webm"
+
     # Database
     database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/clipfarm"
 
-    # Auth / JWT
-    jwt_secret: str = "change-me-in-production"
+    # Auth / JWT (legacy — Supabase JWKS is the source of truth)
+    jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24 * 7  # 7 days
 
     # Supabase (optional — used for Auth verification)
     supabase_url: str = ""
     supabase_service_role_key: str = ""
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def allowed_content_types_set(self) -> set[str]:
+        return {c.strip() for c in self.allowed_upload_content_types.split(",") if c.strip()}
 
     # Cloudflare R2 / S3
     r2_account_id: str = ""

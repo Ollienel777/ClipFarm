@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import Annotated
 from urllib.parse import urlparse
@@ -8,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user_id
+from app.config import settings
 from app.database import get_db
 from app.models.clip import Clip, ActionType
 from app.models.correction import Correction
@@ -15,12 +17,26 @@ from app.models.player import Player
 from app.models.game import Game
 from app.schemas.clip import ClipOut, ClipTagRequest, ClipLabelsRequest, ClipTrimRequest
 from app.services import storage
+from app.workers.celery_app import celery_app
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["clips"])
 
 DB = Annotated[AsyncSession, Depends(get_db)]
 
-API_BASE = "http://localhost:8000"
+API_BASE = settings.api_base_url
+
+
+async def _get_owned_clip(clip_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession) -> Clip:
+    """Fetch a clip and verify the requesting user owns its parent game."""
+    clip = await db.get(Clip, clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    game = await db.get(Game, clip.game_id)
+    if not game or game.owner_id != user_id:
+        raise HTTPException(status_code=404, detail="Clip not found")
+    return clip
 
 
 def _rewrite_urls(clip: Clip) -> dict[str, str | None]:
@@ -35,12 +51,18 @@ def _rewrite_urls(clip: Clip) -> dict[str, str | None]:
 async def list_clips(
     game_id: uuid.UUID,
     db: DB,
+    user_id: uuid.UUID = Depends(get_current_user_id),
     action_type: Annotated[str | None, Query()] = None,
     player_id: Annotated[uuid.UUID | None, Query()] = None,
     min_confidence: Annotated[float, Query(ge=0, le=1)] = 0.0,
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 50,
 ):
+    # Verify game ownership
+    game = await db.get(Game, game_id)
+    if not game or game.owner_id != user_id:
+        raise HTTPException(status_code=404, detail="Game not found")
+
     q = select(Clip).where(Clip.game_id == game_id)
 
     if action_type:
@@ -78,11 +100,14 @@ async def list_clips(
 
 
 @router.get("/media/clips/{clip_id}.mp4")
-async def stream_clip(clip_id: uuid.UUID, db: DB, request: Request):
+async def stream_clip(
+    clip_id: uuid.UUID,
+    db: DB,
+    request: Request,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+):
     """Stream a clip video from R2 via the API (avoids public URL issues)."""
-    clip = await db.get(Clip, clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await _get_owned_clip(clip_id, user_id, db)
     key = urlparse(clip.clip_url).path.lstrip("/")
     client = storage._client()
     range_header = request.headers.get("range")
@@ -114,16 +139,21 @@ async def stream_clip(clip_id: uuid.UUID, db: DB, request: Request):
 
 
 @router.get("/media/clips/{clip_id}/thumb.jpg")
-async def stream_thumbnail(clip_id: uuid.UUID, db: DB):
+async def stream_thumbnail(
+    clip_id: uuid.UUID,
+    db: DB,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+):
     """Stream a clip thumbnail from R2 via the API."""
-    clip = await db.get(Clip, clip_id)
-    if not clip or not clip.thumbnail_url:
+    clip = await _get_owned_clip(clip_id, user_id, db)
+    if not clip.thumbnail_url:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
     key = urlparse(clip.thumbnail_url).path.lstrip("/")
     try:
         resp = storage._client().get_object(Bucket=storage.settings.r2_bucket_name, Key=key)
     except Exception:
-        raise HTTPException(status_code=404, detail="Thumbnail not found in storage")
+        logger.warning("Thumbnail fetch failed for clip %s", clip_id, exc_info=True)
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
     return StreamingResponse(
         resp["Body"].iter_chunks(),
         media_type="image/jpeg",
@@ -132,10 +162,13 @@ async def stream_thumbnail(clip_id: uuid.UUID, db: DB):
 
 
 @router.patch("/clips/{clip_id}/tag", response_model=ClipOut)
-async def tag_clip(clip_id: uuid.UUID, body: ClipTagRequest, db: DB):
-    clip = await db.get(Clip, clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
+async def tag_clip(
+    clip_id: uuid.UUID,
+    body: ClipTagRequest,
+    db: DB,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+):
+    clip = await _get_owned_clip(clip_id, user_id, db)
 
     player = await db.get(Player, body.player_id)
     if not player:
@@ -169,9 +202,7 @@ async def update_clip_labels(
     if len(clean_labels) > 2:
         raise HTTPException(status_code=400, detail="Maximum 2 action labels per clip")
 
-    clip = await db.get(Clip, clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await _get_owned_clip(clip_id, user_id, db)
 
     # Determine labels for correction record (preserve user selection order)
     user_labels = body.labels
@@ -244,9 +275,7 @@ async def trim_clip(
     start_delta: negative = extend earlier, positive = shrink from start
     end_delta:   positive = extend later, negative = shrink from end
     """
-    clip = await db.get(Clip, clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
+    clip = await _get_owned_clip(clip_id, user_id, db)
 
     game = await db.get(Game, clip.game_id)
     if not game or not game.raw_video_url:
@@ -270,7 +299,6 @@ async def trim_clip(
     await db.refresh(clip)
 
     # Kick off background re-cut via Celery
-    from app.workers.celery_app import celery_app
     celery_app.send_task(
         "recut_clip",
         args=[str(clip.id), str(clip.game_id), game.raw_video_url, new_start, new_end],
@@ -284,8 +312,10 @@ async def trim_clip(
 
 
 @router.get("/clips/{clip_id}/share")
-async def share_clip(clip_id: uuid.UUID, db: DB):
-    clip = await db.get(Clip, clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
+async def share_clip(
+    clip_id: uuid.UUID,
+    db: DB,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+):
+    clip = await _get_owned_clip(clip_id, user_id, db)
     return {"url": f"{API_BASE}/media/clips/{clip.id}.mp4"}
