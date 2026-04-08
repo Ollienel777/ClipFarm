@@ -14,10 +14,7 @@ export function useAuthedMedia(url: string | null | undefined): string {
   const [blobUrl, setBlobUrl] = useState<string>("");
 
   useEffect(() => {
-    if (!url) {
-      setBlobUrl("");
-      return;
-    }
+    if (!url) return;
 
     let cancelled = false;
     let createdUrl = "";
