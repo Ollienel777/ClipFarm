@@ -1,15 +1,12 @@
 import logging
 import uuid
 from typing import Annotated
-from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user_id
-from app.config import settings
 from app.database import get_db
 from app.models.clip import Clip, ActionType
 from app.models.correction import Correction
@@ -25,8 +22,6 @@ router = APIRouter(tags=["clips"])
 
 DB = Annotated[AsyncSession, Depends(get_db)]
 
-API_BASE = settings.api_base_url
-
 
 async def _get_owned_clip(clip_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession) -> Clip:
     """Fetch a clip and verify the requesting user owns its parent game."""
@@ -40,10 +35,14 @@ async def _get_owned_clip(clip_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSessi
 
 
 def _rewrite_urls(clip: Clip) -> dict[str, str | None]:
-    """Replace stored R2 URLs with our proxy endpoints."""
+    """Generate short-lived presigned R2 URLs so the browser can fetch directly."""
     return {
-        "clip_url": f"{API_BASE}/media/clips/{clip.id}.mp4",
-        "thumbnail_url": f"{API_BASE}/media/clips/{clip.id}/thumb.jpg" if clip.thumbnail_url else None,
+        "clip_url": storage.presign_from_stored_url(clip.clip_url, expires_in=3600),
+        "thumbnail_url": (
+            storage.presign_from_stored_url(clip.thumbnail_url, expires_in=3600)
+            if clip.thumbnail_url
+            else None
+        ),
     }
 
 
@@ -97,68 +96,6 @@ async def list_clips(
         d.thumbnail_url = urls["thumbnail_url"]
         out.append(d)
     return out
-
-
-@router.get("/media/clips/{clip_id}.mp4")
-async def stream_clip(
-    clip_id: uuid.UUID,
-    db: DB,
-    request: Request,
-    user_id: uuid.UUID = Depends(get_current_user_id),
-):
-    """Stream a clip video from R2 via the API (avoids public URL issues)."""
-    clip = await _get_owned_clip(clip_id, user_id, db)
-    key = urlparse(clip.clip_url).path.lstrip("/")
-    client = storage._client()
-    range_header = request.headers.get("range")
-
-    if range_header:
-        resp = client.get_object(
-            Bucket=storage.settings.r2_bucket_name, Key=key, Range=range_header,
-        )
-        return StreamingResponse(
-            resp["Body"].iter_chunks(),
-            status_code=206,
-            media_type="video/mp4",
-            headers={
-                "Content-Length": str(resp["ContentLength"]),
-                "Content-Range": resp["ContentRange"],
-                "Accept-Ranges": "bytes",
-            },
-        )
-
-    resp = client.get_object(Bucket=storage.settings.r2_bucket_name, Key=key)
-    return StreamingResponse(
-        resp["Body"].iter_chunks(),
-        media_type="video/mp4",
-        headers={
-            "Content-Length": str(resp["ContentLength"]),
-            "Accept-Ranges": "bytes",
-        },
-    )
-
-
-@router.get("/media/clips/{clip_id}/thumb.jpg")
-async def stream_thumbnail(
-    clip_id: uuid.UUID,
-    db: DB,
-    user_id: uuid.UUID = Depends(get_current_user_id),
-):
-    """Stream a clip thumbnail from R2 via the API."""
-    clip = await _get_owned_clip(clip_id, user_id, db)
-    if not clip.thumbnail_url:
-        raise HTTPException(status_code=404, detail="Thumbnail not found")
-    key = urlparse(clip.thumbnail_url).path.lstrip("/")
-    try:
-        resp = storage._client().get_object(Bucket=storage.settings.r2_bucket_name, Key=key)
-    except Exception:
-        logger.warning("Thumbnail fetch failed for clip %s", clip_id, exc_info=True)
-        raise HTTPException(status_code=404, detail="Thumbnail not found")
-    return StreamingResponse(
-        resp["Body"].iter_chunks(),
-        media_type="image/jpeg",
-        headers={"Content-Length": str(resp["ContentLength"])},
-    )
 
 
 @router.patch("/clips/{clip_id}/tag", response_model=ClipOut)
@@ -318,4 +255,4 @@ async def share_clip(
     user_id: uuid.UUID = Depends(get_current_user_id),
 ):
     clip = await _get_owned_clip(clip_id, user_id, db)
-    return {"url": f"{API_BASE}/media/clips/{clip.id}.mp4"}
+    return {"url": storage.presign_from_stored_url(clip.clip_url, expires_in=3600)}

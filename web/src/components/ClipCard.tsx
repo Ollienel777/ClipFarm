@@ -4,7 +4,6 @@ import { useState } from "react";
 import { Play, User, ChevronLeft, ChevronRight, Tag } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { type Clip, type Player, type ActionType, tagClip, updateClipLabels, trimClip } from "@/lib/api";
-import { useAuthedMedia } from "@/lib/useAuthedMedia";
 import { cn } from "@/lib/utils";
 
 const LABEL_OPTIONS = ["spike", "serve", "dig", "set", "block", "not_an_action"];
@@ -28,7 +27,6 @@ export function ClipCard({ clip, players, onPlay, onUpdate }: ClipCardProps) {
   const [localEnd, setLocalEnd] = useState(clip.end_time);
   const [trimLoading, setTrimLoading] = useState(false);
   const [labelLoading, setLabelLoading] = useState(false);
-  const thumbSrc = useAuthedMedia(clip.thumbnail_url);
 
   async function handleTag(playerId: string) {
     setTagging(false);
@@ -102,10 +100,11 @@ export function ClipCard({ clip, players, onPlay, onUpdate }: ClipCardProps) {
         className="relative aspect-video cursor-pointer bg-black overflow-hidden"
         onClick={() => onPlay(clip)}
       >
-        {clip.thumbnail_url && thumbSrc ? (
+        {clip.thumbnail_url ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={thumbSrc}
+            src={clip.thumbnail_url}
+            loading="lazy"
             alt={`${localAction} clip thumbnail`}
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-[1.03]"
           />

@@ -150,7 +150,10 @@
       "Bash(pip show:*)",
       "Bash(ruff check:*)",
       "Bash(python -m mypy api/app --ignore-missing-imports)",
-      "Bash(python -m mypy app --ignore-missing-imports)"
+      "Bash(python -m mypy app --ignore-missing-imports)",
+      "Bash(python -m uvicorn app.main:app --host 0.0.0.0 --port 8000)",
+      "Bash(taskkill //F //PID 2400)",
+      "Bash(curl -s http://localhost:3000 -o /dev/null -w \"Frontend: %{http_code}\\\\n\")"
     ]
   }
 }

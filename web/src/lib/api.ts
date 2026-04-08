@@ -32,18 +32,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/**
- * Fetch a media URL with the user's bearer token and return an object URL.
- * Caller is responsible for revoking the URL when done.
- */
-export async function fetchAuthedBlobUrl(path: string): Promise<string> {
-  const authHeaders = await getAuthHeaders();
-  const res = await fetch(`${API_URL}${path}`, { headers: authHeaders });
-  if (!res.ok) throw new Error(`Media fetch failed: ${res.status}`);
-  const blob = await res.blob();
-  return URL.createObjectURL(blob);
-}
-
 // ─── Games ────────────────────────────────────────────────────────────────────
 
 export interface Game {
