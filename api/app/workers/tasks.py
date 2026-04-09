@@ -57,6 +57,23 @@ def _run_detection_local(video_path: str) -> list[dict]:
     return run_detection(video_path)
 
 
+def _run_dead_time_detection_local(video_path: str) -> list[dict]:
+    """Run standalone dead-time prototype and convert to clip-style detections."""
+    from ml.dead_time_prototype import analyze_video
+
+    result = analyze_video(video_path, sample_stride=4)
+    detections: list[dict] = []
+    for segment in result.get("segments", []):
+        detections.append({
+            "start": float(segment["start"]),
+            "end": float(segment["end"]),
+            "action": "unknown",
+            "confidence": float(segment.get("score", 0.0)),
+            "score": float(segment.get("score", 0.0)),
+        })
+    return detections
+
+
 @celery_app.task(bind=True, name="process_game", max_retries=2, default_retry_delay=60)
 def process_game_task(self, game_id: str, raw_video_url: str):
     """
@@ -160,4 +177,71 @@ def process_game_task(self, game_id: str, raw_video_url: str):
     except Exception as exc:
         logger.exception("Processing failed for game %s", game_id)
         sync_set_game_status(gid, "failed", error_message=str(exc))
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(bind=True, name="process_dead_time", max_retries=2, default_retry_delay=60)
+def process_dead_time_task(self, run_id: str, raw_video_url: str):
+    """
+    Separate dead-time processing pipeline:
+    1. Run dead-time detection locally
+    2. Download source + cut dead-time clips with FFmpeg
+    3. Upload dead-time clips to R2
+    4. Persist dead-time clip rows
+    """
+    from app.workers._sync_db import sync_set_dead_time_run_status, sync_save_dead_time_clips
+    from app.services import storage as s3
+
+    rid = uuid.UUID(run_id)
+    r2_key = urlparse(raw_video_url).path.lstrip("/")
+    logger.info("Starting dead-time processing for run %s", run_id)
+
+    try:
+        sync_set_dead_time_run_status(rid, "processing")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            local_video = tmp / "game.mp4"
+            logger.info("Downloading key=%s from R2 for dead-time processing", r2_key)
+            s3.download_file(r2_key, local_video)
+
+            detections = _run_dead_time_detection_local(str(local_video))
+            logger.info("Dead-time detections: %d", len(detections))
+
+            from ml.pipeline.clip import generate_clips
+            clips_data = generate_clips(str(local_video), detections, tmp)
+
+            rows = []
+            for cd in clips_data:
+                clip_id = uuid.uuid4()
+                clip_url = s3.upload_file(
+                    cd["clip_path"],
+                    s3.dead_time_clip_key(rid, clip_id),
+                    "video/mp4",
+                )
+                thumb_url = None
+                if cd.get("thumb_path"):
+                    thumb_url = s3.upload_file(
+                        cd["thumb_path"],
+                        s3.dead_time_thumbnail_key(rid, clip_id),
+                        "image/jpeg",
+                    )
+
+                rows.append({
+                    "id": clip_id,
+                    "run_id": rid,
+                    "start_time": cd["start"],
+                    "end_time": cd["end"],
+                    "score": float(cd.get("score", cd.get("confidence", 0.0))),
+                    "clip_url": clip_url,
+                    "thumbnail_url": thumb_url,
+                })
+
+            sync_save_dead_time_clips(rows)
+            sync_set_dead_time_run_status(rid, "ready", processed_at=datetime.now(timezone.utc))
+            logger.info("Dead-time done: %d clips for run %s", len(rows), run_id)
+
+    except Exception as exc:
+        logger.exception("Dead-time processing failed for run %s", run_id)
+        sync_set_dead_time_run_status(rid, "failed", error_message=str(exc))
         raise self.retry(exc=exc)
