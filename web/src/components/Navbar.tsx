@@ -31,6 +31,12 @@ export function Navbar() {
               >
                 My Games
               </Link>
+              <Link
+                href="/deadtime"
+                className="rounded-lg px-3 py-2 text-sm font-medium text-muted hover:text-foreground hover:bg-surface-light transition-colors"
+              >
+                Dead Time
+              </Link>
               <Link href="/upload">
                 <Button size="sm">
                   <Upload size={14} />

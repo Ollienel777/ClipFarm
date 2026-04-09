@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     # Environment
     debug: bool = False  # Enables dev fallbacks (DEV_USER_ID auth, etc.)
     api_base_url: str = "http://localhost:8000"
-    cors_origins: str = "http://localhost:3000"  # comma-separated
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"  # comma-separated
 
     # Upload limits
     max_upload_bytes: int = 2 * 1024 * 1024 * 1024  # 2 GB
