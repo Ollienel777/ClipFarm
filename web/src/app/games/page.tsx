@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Clock, CheckCircle, AlertCircle, ChevronRight, Plus } from "lucide-react";
+import { AlertCircle, ChevronRight, Plus, Trash2 } from "lucide-react";
 import { Volleyball } from "@/components/ui/Volleyball";
 import { RequireAuth } from "@/components/RequireAuth";
 import { Button } from "@/components/ui/Button";
-import { getGames, type Game } from "@/lib/api";
+import { getGames, deleteGame, type Game } from "@/lib/api";
 
 function GameStatusDot({ status }: { status: Game["status"] }) {
   const styles: Record<Game["status"], string> = {
@@ -29,6 +29,20 @@ function GamesContent() {
   const [games, setGames] = useState<Game[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+
+  async function handleDelete(gameId: string, title: string) {
+    if (!confirm(`Delete "${title}" and all its clips? This cannot be undone.`)) return;
+    setDeleting(gameId);
+    try {
+      await deleteGame(gameId);
+      setGames((prev) => prev.filter((g) => g.id !== gameId));
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   useEffect(() => {
     getGames()
@@ -93,12 +107,11 @@ function GamesContent() {
       ) : (
         <div className="space-y-2">
           {games.map((game) => (
-            <Link
+            <div
               key={game.id}
-              href={`/games/${game.id}`}
               className="group flex items-center justify-between rounded-xl border border-border bg-surface px-5 py-4 transition-all hover:border-border-light hover:bg-surface-light"
             >
-              <div className="min-w-0">
+              <Link href={`/games/${game.id}`} className="flex-1 min-w-0">
                 <h2 className="font-medium text-foreground truncate">{game.title}</h2>
                 <div className="mt-1 flex items-center gap-3 text-xs text-muted">
                   <span>
@@ -112,15 +125,25 @@ function GamesContent() {
                     <span>{game.clip_count} clips</span>
                   )}
                 </div>
-              </div>
+              </Link>
               <div className="flex items-center gap-3">
                 <div className="flex items-center gap-2">
                   <GameStatusDot status={game.status} />
                   <span className="text-xs text-muted">{STATUS_LABEL[game.status]}</span>
                 </div>
-                <ChevronRight size={16} className="text-zinc-600 group-hover:text-muted transition-colors" />
+                <button
+                  onClick={() => handleDelete(game.id, game.title)}
+                  disabled={deleting === game.id}
+                  className="flex items-center justify-center rounded-lg h-8 w-8 text-zinc-600 hover:text-red-400 hover:bg-red-500/10 transition-colors disabled:opacity-40"
+                  title="Delete game"
+                >
+                  <Trash2 size={15} />
+                </button>
+                <Link href={`/games/${game.id}`}>
+                  <ChevronRight size={16} className="text-zinc-600 group-hover:text-muted transition-colors" />
+                </Link>
               </div>
-            </Link>
+            </div>
           ))}
         </div>
       )}

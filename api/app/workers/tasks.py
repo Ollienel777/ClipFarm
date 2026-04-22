@@ -91,12 +91,37 @@ def process_game_task(self, game_id: str, raw_video_url: str):
                 s3.download_file(r2_key, local_video)
                 detections = _run_detection_local(str(local_video))
 
-        # ── 2. Download video + generate clips with FFmpeg ────────────────
+        # ── 2. Download video, verify with CLIP, generate clips ─────────
         with tempfile.TemporaryDirectory() as tmpdir:
             tmp = Path(tmpdir)
             local_video = tmp / "game.mp4"
             logger.info("Downloading key=%s from R2 for clip generation", r2_key)
             s3.download_file(r2_key, local_video)
+
+            # Audio energy weighting — boost detections near loud moments,
+            # penalize detections during silence, then drop low-confidence ones
+            try:
+                from ml.pipeline.audio import weight_detections_by_audio
+                detections = weight_detections_by_audio(str(local_video), detections)
+                before = len(detections)
+                detections = [d for d in detections if d["confidence"] >= 0.40]
+                if len(detections) < before:
+                    logger.info("Audio filter dropped %d quiet detections", before - len(detections))
+            except Exception as audio_err:
+                logger.warning("Audio weighting failed (%s) — using unweighted", audio_err)
+
+            # CLIP verification gate — filter out false-positive detections
+            from app.config import settings as app_settings
+            if app_settings.clip_verify_enabled:
+                try:
+                    from ml.pipeline.verify import verify_detections
+                    before = len(detections)
+                    detections = verify_detections(str(local_video), detections)
+                    logger.info("CLIP filter: %d → %d detections", before, len(detections))
+                except Exception as clip_err:
+                    logger.warning("CLIP verification failed (%s) — using unfiltered", clip_err)
+            else:
+                logger.info("CLIP verification disabled — skipping")
 
             from ml.pipeline.clip import generate_clips
             clips_data = generate_clips(str(local_video), detections, tmp)

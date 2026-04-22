@@ -3,12 +3,12 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { AlertCircle, ArrowLeft } from "lucide-react";
+import { AlertCircle, ArrowLeft, CheckSquare, Square, Trash2, X } from "lucide-react";
 import { Volleyball } from "@/components/ui/Volleyball";
 import { ClipCard } from "@/components/ClipCard";
 import { ClipModal } from "@/components/ClipModal";
 import { Badge } from "@/components/ui/Badge";
-import { getGame, getClips, getPlayers, type Game, type Clip, type Player, type ActionType, type ClipFilters } from "@/lib/api";
+import { getGame, getClips, getPlayers, deleteClips, type Game, type Clip, type Player, type ActionType, type ClipFilters } from "@/lib/api";
 
 const ACTION_TYPES: ActionType[] = ["spike", "serve", "dig", "set", "block"];
 
@@ -21,6 +21,39 @@ export default function GamePage() {
   const [error, setError] = useState<string | null>(null);
   const [activeClipIndex, setActiveClipIndex] = useState<number | null>(null);
   const [filters, setFilters] = useState<ClipFilters>({ min_confidence: 0 });
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleting, setDeleting] = useState(false);
+
+  const toggleSelect = useCallback((clipId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(clipId)) next.delete(clipId);
+      else next.add(clipId);
+      return next;
+    });
+  }, []);
+
+  function exitSelectMode() {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }
+
+  async function handleDelete() {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`Delete ${selectedIds.size} clip${selectedIds.size === 1 ? "" : "s"}? This cannot be undone.`)) return;
+    setDeleting(true);
+    try {
+      const ids = Array.from(selectedIds);
+      await deleteClips(ids);
+      setClips((prev) => prev.filter((c) => !selectedIds.has(c.id)));
+      exitSelectMode();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setDeleting(false);
+    }
+  }
 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval> | null = null;
@@ -150,8 +183,56 @@ export default function GamePage() {
                 className="w-20"
               />
               <span className="tabular-nums w-7 text-right">{Math.round((filters.min_confidence ?? 0) * 100)}%</span>
+              <button
+                onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+                className="ml-2 flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] font-medium text-zinc-400 hover:text-foreground hover:border-border-light transition-colors"
+              >
+                <CheckSquare size={12} />
+                {selectMode ? "Cancel" : "Select"}
+              </button>
             </div>
           </div>
+
+          {/* Selection action bar */}
+          {selectMode && (
+            <div className="mb-4 flex items-center gap-2 rounded-xl border border-brand/30 bg-brand/5 px-4 py-2.5">
+              <span className="text-xs font-medium text-brand">
+                {selectedIds.size} selected
+              </span>
+              <button
+                onClick={() => setSelectedIds(new Set(clips.map((c) => c.id)))}
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-zinc-400 hover:text-foreground hover:bg-surface-light transition-colors"
+              >
+                <CheckSquare size={11} />
+                Select all ({clips.length})
+              </button>
+              <button
+                onClick={() => setSelectedIds(new Set())}
+                disabled={selectedIds.size === 0}
+                className="flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-zinc-400 hover:text-foreground hover:bg-surface-light transition-colors disabled:opacity-40"
+              >
+                <Square size={11} />
+                Clear
+              </button>
+              <div className="ml-auto flex items-center gap-2">
+                <button
+                  onClick={handleDelete}
+                  disabled={selectedIds.size === 0 || deleting}
+                  className="flex items-center gap-1.5 rounded-md bg-red-500/15 px-2.5 py-1.5 text-[11px] font-semibold text-red-400 hover:bg-red-500/25 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <Trash2 size={12} />
+                  {deleting ? "Deleting..." : `Delete ${selectedIds.size || ""}`}
+                </button>
+                <button
+                  onClick={exitSelectMode}
+                  className="flex items-center justify-center rounded-md h-7 w-7 text-zinc-500 hover:text-foreground hover:bg-surface-light transition-colors"
+                  aria-label="Exit select mode"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Clip grid */}
           {clips.length === 0 ? (
@@ -169,6 +250,8 @@ export default function GamePage() {
                       prev.map((c) => (c.id === updated.id ? updated : c))
                     )
                   }
+                  selected={selectedIds.has(clip.id)}
+                  onToggleSelect={selectMode ? toggleSelect : undefined}
                 />
               ))}
             </div>

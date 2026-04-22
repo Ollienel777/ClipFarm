@@ -1,6 +1,7 @@
 import logging
 import uuid
 from typing import Annotated
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from sqlalchemy import select, func
@@ -109,3 +110,35 @@ async def create_game(
     process_game_task.delay(str(game_id), raw_url)
 
     return GameOut.model_validate(game)
+
+
+@router.delete("/{game_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_game(game_id: uuid.UUID, user_id: UserId, db: DB):
+    """Delete a game, its clips, and all associated R2 files."""
+    game = await db.get(Game, game_id)
+    if not game or game.owner_id != user_id:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    # Collect all R2 keys to delete (clips + thumbnails + raw video)
+    clips_result = await db.execute(select(Clip).where(Clip.game_id == game_id))
+    clips = clips_result.scalars().all()
+
+    r2_keys: list[str] = []
+    for clip in clips:
+        for url in (clip.clip_url, clip.thumbnail_url):
+            if url:
+                r2_keys.append(urlparse(url).path.lstrip("/"))
+    if game.raw_video_url:
+        r2_keys.append(urlparse(game.raw_video_url).path.lstrip("/"))
+
+    # Delete from DB (cascades to clips via relationship)
+    await db.delete(game)
+    await db.commit()
+
+    # Best-effort R2 cleanup
+    for key in r2_keys:
+        try:
+            if key:
+                storage.delete_file(key)
+        except Exception:
+            logger.warning("R2 delete failed for key %s", key, exc_info=True)

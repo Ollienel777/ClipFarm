@@ -50,6 +50,18 @@ export function getGame(id: string): Promise<Game> {
   return request<Game>(`/games/${id}`);
 }
 
+export async function deleteGame(id: string): Promise<void> {
+  const authHeaders = await getAuthHeaders();
+  const res = await fetch(`${API_URL}/games/${id}`, {
+    method: "DELETE",
+    headers: authHeaders,
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`API error ${res.status}: ${text}`);
+  }
+}
+
 export async function uploadGame(
   file: File,
   title: string,
@@ -155,6 +167,13 @@ export function updateClipLabels(clipId: string, labels: string[]): Promise<Clip
   return request<Clip>(`/clips/${clipId}/labels`, {
     method: "PATCH",
     body: JSON.stringify({ labels }),
+  });
+}
+
+export function deleteClips(clipIds: string[]): Promise<{ deleted: number }> {
+  return request<{ deleted: number }>(`/clips/delete`, {
+    method: "POST",
+    body: JSON.stringify({ clip_ids: clipIds }),
   });
 }
 

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Literal
 
 import cv2
@@ -39,6 +38,12 @@ SKIP_FRAMES = 4      # Analyse every Nth frame for speed (4× speedup)
 PAD_BEFORE = 2.0   # seconds
 PAD_AFTER = 3.0    # seconds
 MIN_CLIP_GAP = 1.5  # Merge detections closer than this (seconds)
+
+# ── Quality filters ──────────────────────────────────────────────────────────
+MIN_GROUP_FRAMES = 3       # Minimum frame-level detections to form a clip
+MIN_CONFIDENCE = 0.50      # Discard detections below this confidence
+SPECTATOR_ZONE = 0.20      # Ignore poses in the top 20% of the frame (stands/crowd)
+MOTION_THRESHOLD = 0.015   # Minimum wrist velocity (fraction of frame height per frame)
 
 
 @dataclass
@@ -72,9 +77,14 @@ def run_detection(video_path: str) -> list[dict]:
 
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    logger.info("Video: %.1f fps, %d frames (%.0f s)", fps, total_frames, total_frames / fps)
+    frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 1080
+    logger.info("Video: %.1f fps, %d frames (%.0f s), %dpx tall", fps, total_frames, total_frames / fps, frame_h)
+
+    spectator_cutoff = frame_h * SPECTATOR_ZONE  # Y below this = crowd zone
+    motion_px = MOTION_THRESHOLD * frame_h  # Convert fraction to pixels
 
     frame_detections: list[tuple[float, ActionType, float]] = []  # (time, action, conf)
+    prev_keypoints: dict[int, np.ndarray] = {}  # person_idx → previous frame's keypoints
 
     frame_idx = 0
     while True:
@@ -89,6 +99,8 @@ def run_detection(video_path: str) -> list[dict]:
         t = frame_idx / fps
         results = model(frame, verbose=False)
 
+        curr_keypoints: dict[int, np.ndarray] = {}
+
         for result in results:
             if result.keypoints is None:
                 continue
@@ -98,17 +110,37 @@ def run_detection(video_path: str) -> list[dict]:
             for person_idx in range(len(kps)):
                 person_kps = kps[person_idx]  # (17, 2)
                 person_conf = confs[person_idx] if confs is not None else None
+
+                # Filter 1: Spectator zone — skip poses with shoulders in the top portion
+                shoulder_y = (person_kps[L_SHOULDER][1] + person_kps[R_SHOULDER][1]) / 2
+                if shoulder_y < spectator_cutoff:
+                    continue
+
+                # Filter 2: Motion gate — require wrist movement between frames
+                curr_keypoints[person_idx] = person_kps
+                if person_idx in prev_keypoints:
+                    prev_kps = prev_keypoints[person_idx]
+                    wrist_velocities = []
+                    for wi in (L_WRIST, R_WRIST):
+                        dx = person_kps[wi][0] - prev_kps[wi][0]
+                        dy = person_kps[wi][1] - prev_kps[wi][1]
+                        wrist_velocities.append(np.sqrt(dx * dx + dy * dy))
+                    max_velocity = max(wrist_velocities)
+                    if max_velocity < motion_px:
+                        continue  # Not enough movement — skip
+
                 action, confidence = classify_action(person_kps, person_conf)
-                if action != "unknown":
+                if action != "unknown" and confidence >= MIN_CONFIDENCE:
                     frame_detections.append((t, action, confidence))
 
+        prev_keypoints = curr_keypoints
         frame_idx += 1
 
     cap.release()
-    logger.info("Raw detections: %d", len(frame_detections))
+    logger.info("Raw frame detections: %d", len(frame_detections))
 
     detections = _merge_detections(frame_detections, total_frames / fps)
-    logger.info("Merged detections: %d", len(detections))
+    logger.info("Final detections: %d", len(detections))
     return [{"start": d.start, "end": d.end, "action": d.action, "confidence": d.confidence}
             for d in detections]
 
@@ -160,33 +192,40 @@ def classify_action(
         if visible(R_ELBOW) and y(R_ELBOW) < shoulder_y:
             elbow_above += 1
 
-        if elbow_above >= 1:
-            conf = min(0.6 + 0.2 * wrist_above, 0.9)
-            return "spike", conf
+        if elbow_above >= 1 and wrist_above >= 2:
+            # Both wrists + at least one elbow above shoulder = strong spike signal
+            return "spike", 0.85
+        elif elbow_above >= 1:
+            return "spike", 0.65
 
-        return "serve", 0.55
+        # Serve: only wrist above, elbow still below — weaker signal, require both wrists
+        if wrist_above >= 2:
+            return "serve", 0.60
+        # Single wrist above shoulder is very common in idle poses — skip
+        return "unknown", 0.0
 
     # ── Dig heuristic ──────────────────────────────────────────────────────────
     # Both wrists below hip level (platform pass position)
+    # Tighter: wrists must be WELL below hips and close together
     if (visible(L_WRIST) and visible(R_WRIST)
-            and y(L_WRIST) > hip_y and y(R_WRIST) > hip_y):
-        # Additional: wrists close together
+            and y(L_WRIST) > hip_y + body_height * 0.2
+            and y(R_WRIST) > hip_y + body_height * 0.2):
         wrist_dist = abs(x(L_WRIST) - x(R_WRIST))
-        if wrist_dist < body_height * 0.5:
-            return "dig", 0.6
+        if wrist_dist < body_height * 0.4:
+            return "dig", 0.60
 
     # ── Set heuristic ──────────────────────────────────────────────────────────
-    # Both hands near face level, slightly above shoulders
+    # Both hands near face level, slightly above shoulders, close together
     face_y = y(NOSE) if visible(NOSE) else shoulder_y - 20
     if (visible(L_WRIST) and visible(R_WRIST)):
-        lw_near_face = abs(y(L_WRIST) - face_y) < body_height * 0.3
-        rw_near_face = abs(y(R_WRIST) - face_y) < body_height * 0.3
+        lw_near_face = abs(y(L_WRIST) - face_y) < body_height * 0.25
+        rw_near_face = abs(y(R_WRIST) - face_y) < body_height * 0.25
         wrist_spread = abs(x(L_WRIST) - x(R_WRIST))
-        if lw_near_face and rw_near_face and wrist_spread < body_height * 0.6:
-            return "set", 0.5
+        if lw_near_face and rw_near_face and wrist_spread < body_height * 0.5:
+            return "set", 0.55
 
     # ── Block heuristic ───────────────────────────────────────────────────────
-    # Both arms extended upward (both wrists AND elbows above shoulders)
+    # Both arms fully extended upward (both wrists AND elbows above shoulders)
     if (visible(L_WRIST) and visible(R_WRIST)
             and visible(L_ELBOW) and visible(R_ELBOW)
             and y(L_WRIST) < shoulder_y and y(R_WRIST) < shoulder_y
@@ -194,7 +233,7 @@ def classify_action(
         # Wrists spread wide (hands apart at net)
         wrist_spread = abs(x(L_WRIST) - x(R_WRIST))
         if wrist_spread > body_height * 0.5:
-            return "block", 0.6
+            return "block", 0.65
 
     return "unknown", 0.0
 
@@ -223,6 +262,10 @@ def _merge_detections(
 
     detections = []
     for group in groups:
+        # Filter: require minimum number of frame-level detections
+        if len(group) < MIN_GROUP_FRAMES:
+            continue
+
         # Pick dominant action by confidence
         action_scores: dict[str, float] = {}
         for _, action, conf in group:

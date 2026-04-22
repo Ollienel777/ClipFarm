@@ -48,9 +48,12 @@ def generate_clips(
                 .input(video_path, ss=start, t=duration)
                 .output(
                     str(clip_path),
-                    vcodec="copy",
-                    acodec="copy",
+                    vcodec="libx264",
+                    preset="fast",
+                    crf=23,
+                    acodec="aac",
                     movflags="+faststart",
+                    pix_fmt="yuv420p",
                     loglevel="error",
                 )
                 .overwrite_output()
@@ -105,9 +108,12 @@ def recut_single(
         .input(video_path, ss=start, t=duration)
         .output(
             str(clip_path),
-            vcodec="copy",
-            acodec="copy",
+            vcodec="libx264",
+            preset="fast",
+            crf=23,
+            acodec="aac",
             movflags="+faststart",
+            pix_fmt="yuv420p",
             loglevel="error",
         )
         .overwrite_output()

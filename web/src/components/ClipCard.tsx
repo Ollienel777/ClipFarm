@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Play, User, ChevronLeft, ChevronRight, Tag } from "lucide-react";
+import { Play, User, ChevronLeft, ChevronRight, Tag, Check } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { type Clip, type Player, type ActionType, tagClip, updateClipLabels, trimClip } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -13,9 +13,11 @@ interface ClipCardProps {
   players: Player[];
   onPlay: (clip: Clip) => void;
   onUpdate?: (clip: Clip) => void;
+  selected?: boolean;
+  onToggleSelect?: (clipId: string) => void;
 }
 
-export function ClipCard({ clip, players, onPlay, onUpdate }: ClipCardProps) {
+export function ClipCard({ clip, players, onPlay, onUpdate, selected, onToggleSelect }: ClipCardProps) {
   const [tagging, setTagging] = useState(false);
   const [labeling, setLabeling] = useState(false);
   const [trimming, setTrimming] = useState(false);
@@ -92,14 +94,36 @@ export function ClipCard({ clip, players, onPlay, onUpdate }: ClipCardProps) {
 
   return (
     <div className={cn(
-      "group card-noise overflow-hidden rounded-xl border border-border bg-surface transition-all duration-200 hover:border-border-light hover:shadow-lg hover:shadow-black/20",
+      "group card-noise overflow-hidden rounded-xl border bg-surface transition-all duration-200 hover:shadow-lg hover:shadow-black/20",
+      selected ? "border-brand ring-2 ring-brand/40" : "border-border hover:border-border-light",
       isDiscarded && "opacity-40"
     )}>
       {/* Thumbnail */}
       <div
         className="relative aspect-video cursor-pointer bg-black overflow-hidden"
-        onClick={() => onPlay(clip)}
+        onClick={() => {
+          if (onToggleSelect) onToggleSelect(clip.id);
+          else onPlay(clip);
+        }}
       >
+        {/* Selection checkbox (only shown when parent provides handler) */}
+        {onToggleSelect && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleSelect(clip.id);
+            }}
+            className={cn(
+              "absolute top-2 right-2 z-10 flex h-6 w-6 items-center justify-center rounded-md border-2 backdrop-blur-sm transition-all",
+              selected
+                ? "bg-brand border-brand text-white"
+                : "bg-black/40 border-white/60 text-transparent hover:border-white"
+            )}
+            aria-label={selected ? "Deselect clip" : "Select clip"}
+          >
+            <Check size={14} strokeWidth={3} />
+          </button>
+        )}
         {clip.thumbnail_url ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img

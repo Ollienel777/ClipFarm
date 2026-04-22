@@ -34,3 +34,7 @@ class ClipLabelsRequest(BaseModel):
 class ClipTrimRequest(BaseModel):
     start_delta: float  # seconds to add/subtract from start (negative = extend earlier)
     end_delta: float    # seconds to add/subtract from end (positive = extend later)
+
+
+class ClipDeleteRequest(BaseModel):
+    clip_ids: list[uuid.UUID]

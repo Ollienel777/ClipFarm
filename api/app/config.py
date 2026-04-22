@@ -13,6 +13,9 @@ class Settings(BaseSettings):
     max_upload_bytes: int = 2 * 1024 * 1024 * 1024  # 2 GB
     allowed_upload_content_types: str = "video/mp4,video/quicktime,video/x-matroska,video/webm"
 
+    # ML pipeline
+    clip_verify_enabled: bool = False  # CLIP verification gate (slow on CPU, enable for GPU)
+
     # Database
     database_url: str = "postgresql+asyncpg://postgres:password@localhost:5432/clipfarm"
 

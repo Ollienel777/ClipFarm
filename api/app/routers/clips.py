@@ -1,6 +1,7 @@
 import logging
 import uuid
 from typing import Annotated
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
@@ -12,7 +13,13 @@ from app.models.clip import Clip, ActionType
 from app.models.correction import Correction
 from app.models.player import Player
 from app.models.game import Game
-from app.schemas.clip import ClipOut, ClipTagRequest, ClipLabelsRequest, ClipTrimRequest
+from app.schemas.clip import (
+    ClipDeleteRequest,
+    ClipLabelsRequest,
+    ClipOut,
+    ClipTagRequest,
+    ClipTrimRequest,
+)
 from app.services import storage
 from app.workers.celery_app import celery_app
 
@@ -246,6 +253,49 @@ async def trim_clip(
     out.clip_url = urls["clip_url"]  # type: ignore[assignment]
     out.thumbnail_url = urls["thumbnail_url"]
     return out
+
+
+@router.post("/clips/delete")
+async def delete_clips(
+    body: ClipDeleteRequest,
+    db: DB,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+):
+    """Bulk-delete clips. Verifies ownership of every ID before touching anything."""
+    if not body.clip_ids:
+        return {"deleted": 0}
+
+    # Fetch all requested clips and their owning games in one go
+    rows = (await db.execute(
+        select(Clip, Game)
+        .join(Game, Game.id == Clip.game_id)
+        .where(Clip.id.in_(body.clip_ids))
+    )).all()
+
+    # Reject the entire request if any clip is missing or not owned
+    if len(rows) != len(set(body.clip_ids)):
+        raise HTTPException(status_code=404, detail="One or more clips not found")
+    for _, game in rows:
+        if game.owner_id != user_id:
+            raise HTTPException(status_code=404, detail="One or more clips not found")
+
+    # Delete from R2 (best-effort) and DB
+    deleted = 0
+    for clip, _ in rows:
+        for url in (clip.clip_url, clip.thumbnail_url):
+            if not url:
+                continue
+            try:
+                key = urlparse(url).path.lstrip("/")
+                if key:
+                    storage.delete_file(key)
+            except Exception:
+                logger.warning("R2 delete failed for clip %s", clip.id, exc_info=True)
+        await db.delete(clip)
+        deleted += 1
+
+    await db.commit()
+    return {"deleted": deleted}
 
 
 @router.get("/clips/{clip_id}/share")
