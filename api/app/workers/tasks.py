@@ -58,8 +58,8 @@ def _run_detection_local(video_path: str) -> list[dict]:
 
 
 def _run_dead_time_detection_local(video_path: str) -> list[dict]:
-    """Run standalone dead-time prototype and convert to clip-style detections."""
-    from ml.dead_time_prototype import analyze_video
+    """Run dead-time detection and convert it to clip-style detections."""
+    from ml.dead_time import analyze_video
 
     result = analyze_video(video_path, sample_stride=4)
     detections: list[dict] = []
