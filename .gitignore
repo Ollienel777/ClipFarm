@@ -47,3 +47,5 @@ runs/
 # Misc
 .turbo/
 .claude/
+*.MOV
+*.mov

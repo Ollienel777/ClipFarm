@@ -483,6 +483,67 @@ def contacts_to_rallies(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Serialization — save / load a TrackedBall from ball_track.json
+# ─────────────────────────────────────────────────────────────────────────────
+
+def save_track(tracker: TrackedBall, output_path: str, metadata: dict | None = None) -> None:
+    """
+    Write a TrackedBall to a ball_track.json file compatible with
+    ball-track/annotate_video.py and load_track().
+
+    metadata: optional extra fields (video path, model id, fps, etc.)
+    """
+    import json as _json
+    from datetime import datetime, timezone
+
+    detections = [
+        {
+            "frame":      p.frame,
+            "time":       round(p.time, 4),
+            "x":          round(p.x, 2),
+            "y":          round(p.y, 2),
+            "width":      None,
+            "height":     None,
+            "confidence": round(p.confidence, 4),
+            "tracked":    True,
+        }
+        for p in tracker.positions
+    ]
+
+    payload = {**(metadata or {}), "created_at": datetime.now(timezone.utc).isoformat(), "detections": detections}
+    import pathlib
+    pathlib.Path(output_path).write_text(_json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    logger.info("Saved ball track (%d positions) → %s", len(detections), output_path)
+
+
+def load_track(json_path: str) -> TrackedBall:
+    """
+    Load a TrackedBall from a ball_track.json file.
+
+    Accepts files produced by either track_ball.py (ball-track/) or save_track().
+    Only entries with tracked=true are loaded as BallPosition objects.
+    """
+    import json as _json
+    data = _json.loads(open(json_path, encoding="utf-8").read())
+    fps  = float(data.get("fps", 30.0))
+
+    tracker = TrackedBall()
+    for d in data.get("detections", []):
+        if not d.get("tracked"):
+            continue
+        tracker.positions.append(BallPosition(
+            frame=int(d["frame"]),
+            time=float(d["time"]),
+            x=float(d["x"]),
+            y=float(d["y"]),
+            confidence=float(d["confidence"]) if d["confidence"] is not None else 0.0,
+        ))
+
+    logger.info("Loaded %d ball positions from %s", len(tracker.positions), json_path)
+    return tracker
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Public entry point
 # ─────────────────────────────────────────────────────────────────────────────
 
