@@ -13,7 +13,7 @@ from app.models.collection import Collection, CollectionClip
 from app.models.player import Player
 from app.schemas.clip import ClipOut
 from app.schemas.collection import CollectionOut, CollectionCreate, CollectionRename, CollectionAddClip
-from app.services import storage
+from app.services import access, storage
 
 router = APIRouter(prefix="/collections", tags=["collections"])
 
@@ -90,9 +90,16 @@ async def delete_collection(collection_id: uuid.UUID, user_id: UserId, db: DB):
 async def list_collection_clips(collection_id: uuid.UUID, user_id: UserId, db: DB):
     await _get_owned_collection(collection_id, user_id, db)
 
+    # The collection is the caller's (checked above), but the clips inside it
+    # need not be: once a clip can be saved from someone else's public content,
+    # a collection is a cross-owner list. Re-check each clip's visibility in SQL
+    # so a clip that later goes private drops out instead of lingering here
+    # (CF-108).
     result = await db.execute(
-        select(Clip)
-        .join(CollectionClip, CollectionClip.clip_id == Clip.id)
+        access.apply_clip_visibility(
+            select(Clip).join(CollectionClip, CollectionClip.clip_id == Clip.id),
+            user_id,
+        )
         .where(CollectionClip.collection_id == collection_id)
         .order_by(CollectionClip.added_at.desc())
     )
@@ -105,10 +112,21 @@ async def list_collection_clips(collection_id: uuid.UUID, user_id: UserId, db: D
         for p in pr.scalars():
             player_map[p.id] = p.name
 
+    # A collection spans games, so source_available (CF-194) needs one lookup
+    # per distinct game rather than the single game a clip listing has.
+    game_ids = {c.game_id for c in clips}
+    raw_available: dict[uuid.UUID, bool] = {}
+    if game_ids:
+        gr = await db.execute(
+            select(Game.id, Game.raw_video_url).where(Game.id.in_(game_ids))
+        )
+        raw_available = {gid: url is not None for gid, url in gr}
+
     out = []
     for c in clips:
         d = ClipOut.model_validate(c)
         d.player_name = player_map.get(c.player_id) if c.player_id else None  # type: ignore[arg-type]
+        d.source_available = raw_available.get(c.game_id, False)
         if storage.r2_configured():
             d.clip_url = storage.presign_from_stored_url(c.clip_url, expires_in=3600)  # type: ignore[assignment]
             d.thumbnail_url = (
@@ -128,12 +146,12 @@ async def add_clip_to_collection(
 ):
     col = await _get_owned_collection(collection_id, user_id, db)
 
-    # Verify clip belongs to this user
+    # Saving is a read-side action: anything the user may view, they may add
+    # to their own collection (CF-108). Previously owner-only, which would have
+    # made public clips unsaveable the moment feeds exist.
     clip = await db.get(Clip, body.clip_id)
-    if not clip:
-        raise HTTPException(status_code=404, detail="Clip not found")
-    game = await db.get(Game, clip.game_id)
-    if not game or game.owner_id != user_id:
+    game = await db.get(Game, clip.game_id) if clip else None
+    if not access.can_view_clip(user_id, clip, game):
         raise HTTPException(status_code=404, detail="Clip not found")
 
     # Upsert — silently succeed if already in collection

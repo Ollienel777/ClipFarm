@@ -1,0 +1,85 @@
+# docker-compose.prod.yml — CF-41: run the ClipFarm backend off a dev laptop.
+#
+# Production override for running redis + api + worker on an always-on VPS so
+# video processing no longer stops when a laptop sleeps. Layered on top of the
+# dev docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build redis api worker
+#
+# What this override changes vs the dev stack:
+#   - No local Postgres. DATABASE_URL in .env.docker points at Supabase. The
+#     `!override` on depends_on below drops the db dependency so the api/worker
+#     don't wait on a container that isn't started (omit `db` from the `up`
+#     service list above and nothing references it).
+#   - No source bind-mounts and no --reload. Services run the code baked into
+#     the image at build time, not whatever happens to be on the box's disk.
+#   - Redis stays port-less: reachable only inside the compose network, never
+#     exposed to the internet (an open redis is a well-known RCE vector).
+#
+# NOTE ON `!override` / `!reset`: Compose *merges* list/map fields (depends_on,
+# volumes) across -f files by default — a plain narrower list would UNION with
+# the base, not replace it, leaving db + bind-mounts in place. The `!override`
+# and `!reset` tags force replacement. Requires Docker Compose v2.24+.
+#
+# PREREQUISITE — MODAL_TOKEN_ID / MODAL_TOKEN_SECRET must be set in .env.docker.
+# Since CF-164 this is a hard requirement, not a performance knob: ball tracking
+# and pose both run on Modal's T4 GPU, and the image no longer ships torch to
+# fall back to. Without Modal the box still cuts clips, but every game comes out
+# with trajectory-only labels — and if the ball model is unavailable too, the
+# game fails outright rather than inventing clips. Deploy both Modal apps first:
+#   modal deploy ml/modal_app.py     # ball tracking (CF-11)
+#   modal deploy ml/modal_pose.py    # pose (CF-164)
+
+services:
+  api:
+    # Supabase via .env.docker DATABASE_URL — drop the local-db dependency, the
+    # source bind-mounts, and reload. Migrations do NOT run on boot: the start
+    # command's guard skips a non-local host (CF-189), so apply them by hand
+    # (see the migration note in DEPLOY.md).
+    depends_on: !override
+      redis:
+        condition: service_healthy
+    volumes: !override []
+    environment:
+      # This box IS production, so hold it to the production config check
+      # (CF-172): the api refuses to start when DATABASE_URL, the Supabase keys
+      # or the R2 credentials are missing from .env.docker, naming the ones that
+      # are absent, instead of falling back to a localhost database or failing
+      # at the first upload. Set here rather than in .env.docker because that
+      # file is also the dev stack's, where the defaults are meant to work.
+      ENVIRONMENT: production
+    restart: unless-stopped
+
+  worker:
+    depends_on: !override
+      redis:
+        condition: service_healthy
+    # No volumes at all: drop the ./api and ./ml bind-mounts so the worker runs
+    # image code, and drop the model_cache volume with them — CF-164 took the
+    # last model out of this image, so there are no weights to cache.
+    volumes: !override []
+    environment:
+      # api and worker share one .env.docker on this box, so anything set to
+      # troubleshoot the api lands on the worker too — the service that writes to
+      # the database. Both switches are therefore pinned here, not merely left
+      # unset. `environment:` takes precedence over `env_file:`, which is what
+      # makes these override .env.docker rather than being overridden by it.
+      #
+      # ALLOW_STUB_DETECTIONS is the one that matters: it permits the pose-first
+      # fallback to return fabricated clips, which this worker would then cut,
+      # upload and persist as genuine highlights. DEBUG no longer grants that by
+      # any route (CF-164 review 3) and is pinned so it cannot drift back in.
+      ALLOW_STUB_DETECTIONS: "false"
+      DEBUG: "false"
+      # Same production config check as the api above (CF-172) — the worker
+      # reads the same credentials and fails just as quietly without them.
+      ENVIRONMENT: production
+    # No POSE_* block here any more. It used to pin the light config
+    # (yolov8n-pose @ 640, every 8th frame) because pose was the one model still
+    # running locally and this box is CPU-only by design. CF-164 moved pose to
+    # Modal's T4, so app/config.py's defaults (yolov8s-pose @ 1280, every 4th
+    # frame) are what runs — affordable now, and better labels. Nothing to
+    # override, and nothing inherited from the base file to clear: note that
+    # setting POSE_MODEL to "" would NOT restore the default, it would pass an
+    # empty weight name straight through to YOLO().
+    restart: unless-stopped

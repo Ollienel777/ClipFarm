@@ -7,6 +7,10 @@ on:
 
 jobs:
   web:
+    # NOTE: this job also runs vitest now. Do not rename it to match — the name
+    # is a required status check by exact string in the main-protection ruleset,
+    # so renaming stops that context reporting and blocks every PR until the
+    # ruleset is updated to match. Same trap as the api job below.
     name: Web (lint + typecheck)
     runs-on: ubuntu-latest
     steps:
@@ -18,16 +22,78 @@ jobs:
       - run: npm ci --workspace=web
       - run: npm run lint --workspace=web
       - run: npm run typecheck --workspace=web
+      # Unit tests for web/ (CF-96). Pure logic, no browser — runs in ~1s.
+      - run: npm run test --workspace=web
 
   api:
     name: API (ruff + mypy)
     runs-on: ubuntu-latest
+    # Throwaway Postgres for the CF-184 advisory-lock tests. They assert what
+    # the *database* does — mutual exclusion, and a session lock dying with its
+    # connection — which no test double can stand in for, and which is the whole
+    # reason the per-game lock moved off Redis. Nothing else in api/tests needs
+    # it; without LOCK_TEST_DATABASE_URL set below they skip.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install ruff mypy
+      - run: pip install ruff mypy pytest
       - run: ruff check api/
       - run: mypy api/app --ignore-missing-imports
+      # ml/eval is pure, unit-tested logic — lint it too (rest of ml/ is not yet covered).
+      - run: ruff check ml/eval
+      - run: mypy ml/eval --ignore-missing-imports --explicit-package-bases --namespace-packages
+      # numpy is installed AFTER the lint/type steps, for the same reason the api
+      # dependencies below are: ruff and mypy are tuned against a dependency-free
+      # environment, and numpy ships py.typed, so its presence changes what
+      # --ignore-missing-imports resolves and hence the error set mypy reports.
+      #
+      # Pinned to the version the worker image and api tests use
+      # (ml/requirements.txt, api/requirements-dev.txt). Unpinned it resolves to
+      # numpy 2.x, so the guarded builder's speed math would be validated here
+      # against a different major version than anything that runs it.
+      - run: pip install "numpy==1.26.4"
+      # ml unit tests (eval metrics + dead-time) — stdlib + numpy, runs in seconds.
+      - run: python -m pytest ml/tests/
+      # api unit tests now need the application's own dependencies:
+      # app.observability imports app.config, which imports pydantic-settings.
+      # CF-102 anticipated this and deliberately deferred the install until
+      # something actually required it; test_observability.py is that moment.
+      #
+      # Installed HERE rather than beside `pip install ruff mypy pytest` above,
+      # so ruff and mypy keep running in the dependency-free environment they
+      # were tuned against. With the real packages present, mypy
+      # --ignore-missing-imports resolves stubs it previously skipped and
+      # reports a different, larger error set — worth doing deliberately, not as
+      # a side effect of this fix.
+      #
+      # requirements-DEV.txt, not requirements.txt: it pulls the runtime deps in
+      # via `-r requirements.txt` and adds the test-only ones. It is what stops
+      # tests passing by skipping — each import a test guards on has to be
+      # installed here, and test-only packages must not move into
+      # requirements.txt, which ships them into the production image.
+      - run: pip install -r api/requirements-dev.txt
+      # working-directory is api/ so `from app... import ...` resolves.
+      #
+      # NOTE: do not rename this job to match what it actually runs. "API (ruff
+      # + mypy)" is a required status check by exact name in the main-protection
+      # ruleset — renaming stops that context reporting and blocks every PR
+      # until the ruleset is updated to match.
+      - run: python -m pytest tests/
+        working-directory: api
+        env:
+          LOCK_TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres

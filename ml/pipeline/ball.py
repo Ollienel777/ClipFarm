@@ -56,10 +56,30 @@ SEG_MIN_MEDIAN_SPEED_PXPS = 60.0    # px/s: near-stationary segments are held/sp
 # trajectory >25° between samples 0.33s apart, flagging normal flight as hits.
 # Gravity is estimated per-video from coherent segments (median vertical
 # acceleration — free flight dominates, so the median is robust to hits).
-# Thresholds tuned against a real cached trajectory: detector centroid wobble
-# puts the residual noise floor at ~p75 = 450 px/s (15 px/frame @ 30fps).
+# The residual floor was originally 480 px/s, from a p75 noise estimate read off
+# a single cached trajectory by inspection. Scored against hand-labeled rallies
+# (CF-98 harness, #116) that proved ~2x too high: it rejected every contact in
+# 60 of 126 labeled rallies, and since keep-windows are anchored on contacts,
+# the condense stage then cut those rallies as dead time.
+#
+# 240 is a recall-vs-condense tradeoff, not a strict optimum. On test1, 180
+# scores marginally better on both recall numbers (102 vs 101 of 126 rallies
+# hit, 167s vs 176s of live play lost) but removes less dead time; 240 was
+# picked because below it the recall gains are marginal while the condensed
+# video keeps growing. Further down the contact count still climbs with
+# rallies-hit flat, i.e. only false positives are being added.
+#
+# Measured on the dead-time metric only. find_contacts feeds a second consumer:
+# tasks.py runs it through contacts_to_rallies for highlight clips, where
+# MIN_RALLY_CONTACTS gates at 3 — so the extra contacts can lift marginal 1-2
+# contact segments over that line and emit junk clips. That side is unmeasured;
+# score it with the CF-55 highlight mode against results/test1.jsonl before
+# tuning this further.
+#
+# Re-tune by scoring, not by inspecting a trajectory:
+#   docker compose run --rm --no-deps worker python -m ml.eval.tune_contacts
 CONTACT_RESIDUAL_RATIO    = 0.50    # residual must exceed this fraction of ball speed
-CONTACT_RESIDUAL_MIN_PXPS = 480.0   # ...and this absolute floor (px/s, above noise)
+CONTACT_RESIDUAL_MIN_PXPS = 240.0   # ...and this absolute floor (px/s, above noise)
 CONTACT_HIT_SPEED_PXPS    = 240.0   # px/s: a real hit has speed on at least one side
 MIN_CONTACT_SPACING       = 0.6     # seconds: debounce — one hit can't fire twice
 MAX_SAMPLE_GAP_SEC        = 1.0     # skip triples spanning a detection gap
@@ -128,9 +148,47 @@ class TrackedBall:
 # 1. Detection
 # ─────────────────────────────────────────────────────────────────────────────
 
+class BallRuntimeUnavailable(RuntimeError):
+    """Roboflow `inference` is not importable in THIS process (CF-225).
+
+    Named after `detect.PoseRuntimeUnavailable`, but claiming less than it does:
+    that type is translated to `PermanentPipelineError` at the worker boundary
+    so Celery stops retrying, and this one is not. Ball tracking has somewhere
+    left to go when it fails — the pose-first scan — so a caller that swallowed
+    the retry here would be deciding the whole run's fate on one stage.
+
+    What the distinct type is for is telling "no runtime here" apart from
+    "tracking ran and failed", which are different problems with different
+    fixes. A RuntimeError subclass, so existing broad handling still catches it.
+
+    Which process this is matters: the Modal image (`ml/modal_app.py`) installs
+    `inference` and is where tracking is *meant* to run, so this firing there is
+    a broken image. Everywhere else it is the expected state — the worker ships
+    no ML runtime since CF-164, and a dev checkout does not get one from
+    `ml/requirements.txt` either: that file pins `inference-sdk`, a different
+    distribution providing `inference_sdk`, not the `inference` this needs.
+    So the local-CPU path is effectively Modal-image-only in practice.
+    """
+
+
 def _load_model(api_key: str):
     """Load Roboflow ball detection model (weights cached after first run)."""
-    from inference import get_model
+    try:
+        from inference import get_model
+    except ImportError as import_err:
+        # Deliberately says only what is true from inside any process: this one
+        # cannot run the model. `_load_model` is the primary path on the Modal
+        # GPU worker and the fallback path in the Celery worker, so the caller
+        # — not this message — is what knows whether that is a broken image or
+        # a deployment that never intended to run it here.
+        raise BallRuntimeUnavailable(
+            f"Roboflow `inference` is not importable in this process ({import_err}), so "
+            f"ball model {MODEL_ID} cannot run here. The only place it is installed is "
+            "the `clipfarm-ball-tracking` Modal image (ml/modal_app.py pins "
+            "inference==1.3.3) — note that ml/requirements.txt carries `inference-sdk`, "
+            "a different distribution (module `inference_sdk`, an HTTP client) that does "
+            "NOT provide this import."
+        ) from import_err
     logger.info("Loading ball detection model %s", MODEL_ID)
     return get_model(MODEL_ID, api_key=api_key)
 
@@ -199,10 +257,19 @@ def _pick_active(
     return best
 
 
-def track_ball(video_path: str, api_key: str, sample_every: int = SAMPLE_EVERY) -> TrackedBall:
+def track_ball(
+    video_path: str,
+    api_key: str,
+    sample_every: int = SAMPLE_EVERY,
+    on_progress=None,
+) -> TrackedBall:
     """
     Run detection on every sample_every frame and build a trajectory for
     the active ball, ignoring stationary spare balls.
+
+    on_progress, when given, is called with the fraction of frames processed
+    (0-1) roughly every 1% of the video. Callback errors are swallowed —
+    reporting must never break tracking.
 
     Returns a TrackedBall with all confirmed positions.
     """
@@ -225,6 +292,8 @@ def track_ball(video_path: str, api_key: str, sample_every: int = SAMPLE_EVERY) 
 
     tracker   = TrackedBall()
     frame_idx = 0
+    # Report at most ~100 times per video, only from sampled frames.
+    report_every = max(sample_every, (total_frames // 100 // sample_every or 1) * sample_every)
 
     # We only run inference on every sample_every-th frame, so only those need
     # to be decoded. cap.read() = grab()+retrieve() decodes every frame; for
@@ -251,6 +320,12 @@ def track_ball(video_path: str, api_key: str, sample_every: int = SAMPLE_EVERY) 
                 ))
             else:
                 tracker.misses += 1
+
+            if on_progress and total_frames > 0 and frame_idx % report_every == 0:
+                try:
+                    on_progress(frame_idx / total_frames)
+                except Exception:
+                    logger.warning("Progress callback failed", exc_info=True)
         else:
             if not cap.grab():
                 break

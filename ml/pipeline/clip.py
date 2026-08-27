@@ -13,14 +13,64 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# ffmpeg sizes its thread pools from the visible core count, which inside a
+# container is the HOST's, not what the cgroup allows. On a 16-core host x264
+# defaults to ~24 encoder threads and allocates per-thread frame buffers —
+# hundreds of MB at 1080p — which OOM-killed the 512 MB worker on its first
+# production run (CF-224). Every encode and decode below pins the count.
+#
+# Callers pass the deployed value (api Settings.ffmpeg_threads), since the right
+# number depends on the instance plan. Production runs 1 on a whole CPU
+# (`standard`, CF-240) — that 1 was measured at 0.5 CPU under CF-224 and carried
+# over unchanged when the plan grew, so it is a known-safe value rather than a
+# tuned one; CF-223 re-measures it at the new size. This is the fallback for a
+# bare pipeline call: low enough for any container, since the whole failure mode
+# is a default sized by the wrong machine.
+DEFAULT_THREADS = 2
+
+
+def _bounded(threads: int) -> int:
+    """Refuse a thread count that is not a bound.
+
+    Settings.ffmpeg_threads rejects these at boot, but this module is called
+    directly too (eval, scripts), and the two bad values fail in ways that do
+    not look like a bad argument: 0 is ffmpeg's *auto* sentinel, so it quietly
+    restores the host-sized pool, and a negative fails every cut inside the
+    swallowing `except` below — a game with no clips and no obvious cause.
+    """
+    if threads < 1:
+        logger.warning(
+            "ffmpeg threads=%s is not a usable bound — falling back to %d",
+            threads, DEFAULT_THREADS,
+        )
+        return DEFAULT_THREADS
+    return threads
+
+
+def _report(on_progress, fraction: float) -> None:
+    """Invoke a progress callback; reporting must never break the cut."""
+    if on_progress is None:
+        return
+    try:
+        on_progress(fraction)
+    except Exception:
+        logger.warning("Progress callback failed", exc_info=True)
+
 
 def generate_clips(
     video_path: str,
     detections: list[dict],
     output_dir: Path,
+    on_progress=None,
+    threads: int = DEFAULT_THREADS,
 ) -> list[dict]:
     """
     Cut clips and extract thumbnails for each detection.
+
+    on_progress, when given, is called with the fraction of detections
+    processed (0-1) after each one; callback errors are swallowed.
+
+    threads bounds both the decoder and the x264 encoder — see DEFAULT_THREADS.
 
     Returns extended detection dicts with keys:
       clip_path, thumb_path (may be None on failure)
@@ -31,8 +81,9 @@ def generate_clips(
         logger.warning("ffmpeg-python not installed — skipping clip generation")
         return []
 
+    threads = _bounded(threads)
     results = []
-    for det in detections:
+    for det_idx, det in enumerate(detections):
         clip_id = uuid.uuid4()
         clip_path = output_dir / f"{clip_id}.mp4"
         thumb_path = output_dir / f"{clip_id}.jpg"
@@ -45,7 +96,7 @@ def generate_clips(
         try:
             (
                 ffmpeg
-                .input(video_path, ss=start, t=duration)
+                .input(video_path, ss=start, t=duration, threads=threads)
                 .output(
                     str(clip_path),
                     vcodec="libx264",
@@ -54,6 +105,7 @@ def generate_clips(
                     acodec="aac",
                     movflags="+faststart",
                     pix_fmt="yuv420p",
+                    threads=threads,
                     loglevel="error",
                 )
                 .overwrite_output()
@@ -61,6 +113,7 @@ def generate_clips(
             )
         except Exception:
             logger.exception("Failed to cut clip for detection at %.1f", start)
+            _report(on_progress, (det_idx + 1) / len(detections))
             continue
 
         # ── Extract thumbnail ─────────────────────────────────────────────────
@@ -68,8 +121,8 @@ def generate_clips(
         try:
             (
                 ffmpeg
-                .input(video_path, ss=mid)
-                .output(str(thumb_path), vframes=1, loglevel="error")
+                .input(video_path, ss=mid, threads=threads)
+                .output(str(thumb_path), vframes=1, threads=threads, loglevel="error")
                 .overwrite_output()
                 .run()
             )
@@ -82,6 +135,7 @@ def generate_clips(
             "clip_path": clip_path,
             "thumb_path": thumb_path if thumb_ok else None,
         })
+        _report(on_progress, (det_idx + 1) / len(detections))
 
     return results
 
@@ -90,6 +144,8 @@ def generate_condensed_video(
     video_path: str,
     windows: list[tuple[float, float]],
     output_dir: Path,
+    on_progress=None,
+    threads: int = DEFAULT_THREADS,
 ) -> tuple[Path, float]:
     """
     Cut each keep-window and stitch them into one condensed video.
@@ -100,21 +156,37 @@ def generate_condensed_video(
     discarded and fail atomically on any bad edge; per-part encoding only
     touches kept footage and lets one bad window be skipped.
 
+    on_progress, when given, is called with the fraction of windows encoded
+    (0-1) after each part; the final stream-copy stitch is near-free and
+    not reported. Callback errors are swallowed.
+
+    threads bounds both the decoder and the x264 encoder — see DEFAULT_THREADS.
+    It matters at least as much here as in generate_clips: condensing re-encodes
+    every kept second, not one window.
+
     Returns (condensed_path, condensed_duration).
     Raises RuntimeError if no window could be cut.
     """
     import ffmpeg
 
+    threads = _bounded(threads)
     parts_dir = output_dir / "parts"
     parts_dir.mkdir(exist_ok=True)
     part_paths: list[Path] = []
+
+    # Report progress by kept-seconds encoded, not window count: windows vary
+    # widely in length, so count-based progress lurches on a long window. Each
+    # part's encode time is ~proportional to its duration, so this tracks the
+    # real work and keeps the bar (and its ETA) smooth.
+    total_kept = sum(end - start for start, end in windows) or 1.0
+    encoded = 0.0
 
     for i, (start, end) in enumerate(windows):
         part_path = parts_dir / f"part_{i:04d}.mp4"
         try:
             (
                 ffmpeg
-                .input(video_path, ss=start, t=end - start)
+                .input(video_path, ss=start, t=end - start, threads=threads)
                 .output(
                     str(part_path),
                     vcodec="libx264",
@@ -128,6 +200,7 @@ def generate_condensed_video(
                     avoid_negative_ts="make_zero",
                     movflags="+faststart",
                     pix_fmt="yuv420p",
+                    threads=threads,
                     loglevel="error",
                 )
                 .overwrite_output()
@@ -136,6 +209,8 @@ def generate_condensed_video(
             part_paths.append(part_path)
         except Exception:
             logger.exception("Failed to cut condense window %.1f–%.1f", start, end)
+        encoded += end - start
+        _report(on_progress, encoded / total_kept)
 
     if not part_paths:
         raise RuntimeError("All condense windows failed to cut")
@@ -180,13 +255,18 @@ def recut_single(
     start: float,
     end: float,
     output_dir: Path,
+    threads: int = DEFAULT_THREADS,
 ) -> tuple[Path, Path | None]:
     """
     Re-cut a single clip from the source video.
+
+    threads bounds both the decoder and the x264 encoder — see DEFAULT_THREADS.
+
     Returns (clip_path, thumb_path or None).
     """
     import ffmpeg
 
+    threads = _bounded(threads)
     clip_path = output_dir / "recut.mp4"
     thumb_path = output_dir / "recut.jpg"
     duration = end - start
@@ -194,7 +274,7 @@ def recut_single(
 
     (
         ffmpeg
-        .input(video_path, ss=start, t=duration)
+        .input(video_path, ss=start, t=duration, threads=threads)
         .output(
             str(clip_path),
             vcodec="libx264",
@@ -203,6 +283,7 @@ def recut_single(
             acodec="aac",
             movflags="+faststart",
             pix_fmt="yuv420p",
+            threads=threads,
             loglevel="error",
         )
         .overwrite_output()
@@ -213,8 +294,8 @@ def recut_single(
     try:
         (
             ffmpeg
-            .input(video_path, ss=mid)
-            .output(str(thumb_path), vframes=1, loglevel="error")
+            .input(video_path, ss=mid, threads=threads)
+            .output(str(thumb_path), vframes=1, threads=threads, loglevel="error")
             .overwrite_output()
             .run()
         )

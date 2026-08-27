@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.auth import get_current_user_id
+from app.auth import get_current_user_id, get_optional_user_id
 from app.database import get_db
 from app.models.clip import Clip, ActionType
 from app.models.correction import Correction
@@ -20,7 +20,8 @@ from app.schemas.clip import (
     ClipTagRequest,
     ClipTrimRequest,
 )
-from app.services import storage
+from app.services import access, storage
+from app.services.filenames import clip_download_filename
 from app.workers.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -28,17 +29,45 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["clips"])
 
 DB = Annotated[AsyncSession, Depends(get_db)]
+# Read paths accept a signed-out viewer; writes keep get_current_user_id.
+ViewerId = Annotated[uuid.UUID | None, Depends(get_optional_user_id)]
 
 
-async def _get_owned_clip(clip_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession) -> Clip:
-    """Fetch a clip and verify the requesting user owns its parent game."""
+async def _get_viewable_clip(
+    clip_id: uuid.UUID, viewer_id: uuid.UUID | None, db: AsyncSession
+) -> tuple[Clip, Game]:
+    """Fetch a clip the viewer is allowed to READ (CF-108).
+
+    Distinct from _get_owned_clip below, which still gates every write. Reads go
+    through services/access.py so visibility is decided in one place; writes stay
+    owner-only and must not use this.
+    """
+    clip = await db.get(Clip, clip_id)
+    game = await db.get(Game, clip.game_id) if clip else None
+    if not access.can_view_clip(viewer_id, clip, game):
+        # 404 not 403 — a 403 would confirm the clip exists to anyone probing.
+        raise HTTPException(status_code=404, detail="Clip not found")
+    assert clip is not None and game is not None  # narrowed by can_view_clip
+    return clip, game
+
+
+async def _get_owned_clip(
+    clip_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession
+) -> tuple[Clip, Game]:
+    """Fetch a clip and verify the requesting user OWNS its parent game.
+
+    Returns the parent game alongside it: every write path echoes a ClipOut,
+    whose source_available reads off the game (CF-194).
+
+    Write paths only (tag / labels / trim / delete). Read paths use
+    _get_viewable_clip."""
     clip = await db.get(Clip, clip_id)
     if not clip:
         raise HTTPException(status_code=404, detail="Clip not found")
     game = await db.get(Game, clip.game_id)
     if not game or game.owner_id != user_id:
         raise HTTPException(status_code=404, detail="Clip not found")
-    return clip
+    return clip, game
 
 
 def _rewrite_urls(clip: Clip) -> dict[str, str | None]:
@@ -63,7 +92,7 @@ def _rewrite_urls(clip: Clip) -> dict[str, str | None]:
 async def list_clips(
     game_id: uuid.UUID,
     db: DB,
-    user_id: uuid.UUID = Depends(get_current_user_id),
+    viewer_id: ViewerId = None,
     action_type: Annotated[str | None, Query()] = None,
     player_id: Annotated[uuid.UUID | None, Query()] = None,
     min_confidence: Annotated[float, Query(ge=0, le=1)] = 0.0,
@@ -72,12 +101,17 @@ async def list_clips(
     page: Annotated[int, Query(ge=1)] = 1,
     page_size: Annotated[int, Query(ge=1, le=100)] = 50,
 ):
-    # Verify game ownership
+    # The game itself must be viewable, else 404 (indistinguishable from a
+    # game that doesn't exist — see access.assert_can_view_game).
     game = await db.get(Game, game_id)
-    if not game or game.owner_id != user_id:
-        raise HTTPException(status_code=404, detail="Game not found")
+    access.assert_can_view_game(viewer_id, game)
 
-    q = select(Clip).where(Clip.game_id == game_id)
+    # Clips are filtered IN SQL (CF-108). Post-filtering the page in Python
+    # would silently break pagination — ask for 50, get however many survived —
+    # and would have loaded rows the viewer isn't entitled to.
+    q = access.apply_clip_visibility(select(Clip), viewer_id).where(
+        Clip.game_id == game_id
+    )
 
     if action_type:
         types = [ActionType(t.strip()) for t in action_type.split(",") if t.strip()]
@@ -110,10 +144,14 @@ async def list_clips(
         for p in pr.scalars():
             player_map[p.id] = p.name
 
+    # One game, so one lookup: False once its raw upload has been swept (CF-194).
+    raw_available = game is not None and game.raw_video_url is not None
+
     out = []
     for c in clips:
         d = ClipOut.model_validate(c)
         d.player_name = player_map.get(c.player_id) if c.player_id else None  # type: ignore[arg-type]
+        d.source_available = raw_available
         urls = _rewrite_urls(c)
         d.clip_url = urls["clip_url"]  # type: ignore[assignment]
         d.thumbnail_url = urls["thumbnail_url"]
@@ -128,7 +166,7 @@ async def tag_clip(
     db: DB,
     user_id: uuid.UUID = Depends(get_current_user_id),
 ):
-    clip = await _get_owned_clip(clip_id, user_id, db)
+    clip, game = await _get_owned_clip(clip_id, user_id, db)
 
     player = await db.get(Player, body.player_id)
     if not player:
@@ -140,6 +178,7 @@ async def tag_clip(
 
     out = ClipOut.model_validate(clip)
     out.player_name = player.name
+    out.source_available = game.raw_video_url is not None
     return out
 
 
@@ -162,7 +201,7 @@ async def update_clip_labels(
     if len(clean_labels) > 2:
         raise HTTPException(status_code=400, detail="Maximum 2 action labels per clip")
 
-    clip = await _get_owned_clip(clip_id, user_id, db)
+    clip, game = await _get_owned_clip(clip_id, user_id, db)
 
     # Determine labels for correction record (preserve user selection order)
     user_labels = body.labels
@@ -211,6 +250,7 @@ async def update_clip_labels(
     await db.refresh(clip)
 
     out = ClipOut.model_validate(clip)
+    out.source_available = game.raw_video_url is not None
     urls = _rewrite_urls(clip)
     out.clip_url = urls["clip_url"]  # type: ignore[assignment]
     out.thumbnail_url = urls["thumbnail_url"]
@@ -235,11 +275,15 @@ async def trim_clip(
     start_delta: negative = extend earlier, positive = shrink from start
     end_delta:   positive = extend later, negative = shrink from end
     """
-    clip = await _get_owned_clip(clip_id, user_id, db)
+    clip, game = await _get_owned_clip(clip_id, user_id, db)
 
-    game = await db.get(Game, clip.game_id)
-    if not game or not game.raw_video_url:
-        raise HTTPException(status_code=400, detail="Source video not available for trimming")
+    # Gone once the raw upload passes raw_upload_retention_days (CF-194).
+    # ClipOut.source_available tells clients this before they try.
+    if not game.raw_video_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Source video no longer available — this game's upload has passed its retention window",
+        )
 
     new_start = max(0, clip.start_time + body.start_delta)
     new_end = clip.end_time + body.end_delta
@@ -265,6 +309,7 @@ async def trim_clip(
     )
 
     out = ClipOut.model_validate(clip)
+    out.source_available = game.raw_video_url is not None
     urls = _rewrite_urls(clip)
     out.clip_url = urls["clip_url"]  # type: ignore[assignment]
     out.thumbnail_url = urls["thumbnail_url"]
@@ -318,7 +363,88 @@ async def delete_clips(
 async def share_clip(
     clip_id: uuid.UUID,
     db: DB,
-    user_id: uuid.UUID = Depends(get_current_user_id),
+    viewer_id: ViewerId = None,
 ):
-    clip = await _get_owned_clip(clip_id, user_id, db)
+    # Read path (CF-108): anyone who may view the clip may mint a share link.
+    clip, _game = await _get_viewable_clip(clip_id, viewer_id, db)
+    # NOTE: still a 1h presigned URL even for public clips. CF-108's card flags
+    # revisiting this — a public clip's link is meant to be passed around, so a
+    # short expiry is user-hostile, while a long one is a bearer token nobody
+    # can revoke. Left as-is here rather than changed without a decision.
     return {"url": storage.presign_from_stored_url(clip.clip_url, expires_in=3600)}
+
+
+@router.get("/clips/{clip_id}/download")
+async def download_clip(
+    clip_id: uuid.UUID,
+    db: DB,
+    viewer_id: ViewerId = None,
+):
+    """The same object as /share, under a name a human can read (CF-100).
+
+    A sibling endpoint rather than a flag on /share, because the two mint
+    genuinely different URLs: /share's is meant to be passed around and to play
+    inline, and this one carries Content-Disposition: attachment. Folding them
+    together would mean one caller's query parameter deciding whether the other
+    caller's link plays or downloads.
+
+    Authorization is /share's, via the same helper — downloading is a read, and
+    the deliberate asymmetry access.py documents (a public clip inside a private
+    game is reachable by direct link) applies here for the same reason.
+
+    Same 3600s expiry as /share, deliberately: that expiry is an open question
+    flagged there, and answering it differently in two places would settle it by
+    accident.
+    """
+    clip, game = await _get_viewable_clip(clip_id, viewer_id, db)
+
+    # The filename is part of the response, not just decoration: presign_url
+    # puts it in the URL's ResponseContentDisposition, in cleartext. So the
+    # question is not only "may this viewer have the bytes" but "may they have
+    # these strings" — a different question, answered in access.py alongside
+    # the asymmetry that makes the two differ. CF-101's zip needs the same gate.
+    identify = access.can_identify(viewer_id, game)
+
+    # Explicit fetch, not clip.player: the relationship is not eagerly loaded
+    # anywhere, and touching it here would lazy-load inside the event loop and
+    # raise MissingGreenlet. list_clips and tag_clip both fetch the same way.
+    player = (
+        await db.get(Player, clip.player_id)
+        if identify and clip.player_id
+        else None
+    )
+
+    # action_type, not labels[0]. `labels` is written by the detector on every
+    # clip — first-seen action types within the rally (ml/pipeline/detect.py) —
+    # so it is not a human-correction marker, and update_clip_labels stores it
+    # through `list(set(...))`, which makes its order non-deterministic across
+    # restarts. `action_type` is the primary action by construction: the
+    # detector sets it to the dominant action by summed confidence, and
+    # update_clip_labels rewrites it from the corrected labels, so a correction
+    # already reaches it.
+    #
+    # ...with one exception, so the file matches what ClipCard shows.
+    # update_clip_labels writes labels=["not_an_action"] and action_type=unknown
+    # together, and ClipCard badges that pair `removed` — so naming the file
+    # `- unknown -` describes a clip the grid says is removed. The second arm of
+    # the condition is ClipCard's own: a clip the detector could not classify
+    # arrives as unknown at zero confidence and is dimmed the same way.
+    #
+    # ClipCard specifically, not "the UI": ClipModal badges clip.action_type
+    # with no discarded branch, so it shows `unknown` where the card shows
+    # `removed`. That disagreement predates this endpoint and is not resolved
+    # here — the filename follows the grid, which is where a clip is picked.
+    discarded = "not_an_action" in (clip.labels or []) or (
+        clip.action_type is ActionType.unknown and not clip.confidence
+    )
+    filename = clip_download_filename(
+        game_title=game.title if identify else None,
+        action="removed" if discarded else clip.action_type.value,
+        player_name=player.name if player else None,
+        start_seconds=clip.start_time,
+    )
+    return {
+        "url": storage.presign_from_stored_url(
+            clip.clip_url, expires_in=3600, download_filename=filename
+        )
+    }
